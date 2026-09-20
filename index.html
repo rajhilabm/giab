@@ -29,6 +29,9 @@ header.top .wrap{display:flex;align-items:center;gap:12px;padding-top:12px;paddi
 .btn:disabled{opacity:.5;cursor:not-allowed}
 .btn.primary{background:var(--br);border-color:var(--br);color:#fff}.btn.primary:hover{background:var(--brd)}
 .btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+.btn.wa{background:#25d366;border-color:#25d366;color:#0b2e1c}.btn.wa:hover{background:#1eb958}
+.optbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--sf);border:1px solid var(--ln);border-radius:14px;padding:10px 14px;margin-bottom:12px;box-shadow:var(--sh)}
+.optbar label.ck{padding:0}
 .btn.ghost{background:transparent}
 .btn.sm{min-height:32px;padding:4px 10px;font-size:14px;border-radius:8px}
 header.top .btn{background:rgba(255,255,255,.16);border-color:transparent;color:#fff}
@@ -135,10 +138,11 @@ tr:last-child td{border-bottom:0}
 <div id="toast" aria-live="polite"></div>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 'use strict';
 /* ================= الثوابت والأدوات ================= */
-const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0};
+const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false};
 const EMAIL_DOMAIN='att.local';   /* نطاق داخلي وهمي لتحويل اسم المستخدم إلى بريد لـ Supabase Auth؛ لا تُرسل عليه رسائل. إن رفضه Supabase غيّره لنطاق حقيقي */
 const toEmail=un=>un+'@'+EMAIL_DOMAIN;
 const UN_RE=/^[a-z0-9._-]{3,30}$/;
@@ -292,6 +296,7 @@ async function loadAllData(){
   const [st,cl,ro,ss]=await Promise.all([S.db.doc('meta/settings').get(),S.db.collection('classes').get(),S.db.collection('rosters').get(),sb.rpc('app_status')]);
   if(ss&&ss.data)syncClock(ss.data.now_ms);
   const settings=st.exists?{...DEF,...st.data()}:{...DEF};
+  setNoPwFlag(settings.noPw);
   const classes=cl.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>cmpAr(a.name,b.name));
   const rosters={};ro.docs.forEach(d=>rosters[d.id]=d.data().list||[]);
   const sig=JSON.stringify([settings,classes,rosters,pr]);
@@ -357,6 +362,7 @@ async function startSession(uid){
     await subMonth(true);
   }catch(e){S.meId=null;S.users=[];S.phase='auth';throw e}
   S.view='home';S.att=null;S.st=null;S.sd=null;S.gsig=null;S.phase='app';render();startLive();
+  if(isAdmin(curUser()))vaultPull().then(ch=>{if(ch&&S.view==='teachers')render()}).catch(()=>{});
   return true;
 }
 async function init(){
@@ -426,7 +432,8 @@ function shell(){
 const schoolName=()=>S.settings.schoolName||S.school||'نظام تحضير الطلاب';
 function loginHTML(){return`<div class="auth"><div class="card"><div style="text-align:center;margin-bottom:14px"><div class="logo" style="margin:0 auto 10px;background:var(--brs);color:var(--brd)">✓</div><h1>${esc(schoolName())}</h1><p class="muted" style="margin:4px 0 0">تسجيل الدخول للتحضير</p></div>
 <label class="f"><span>اسم المستخدم</span><input type="text" id="lu" dir="ltr" autocomplete="username" autocapitalize="off" data-enter="login"></label>
-<label class="f"><span>كلمة المرور</span><input type="password" id="lp" autocomplete="current-password" data-enter="login"></label>
+<div id="lp-box" ${noPwFlag()?'style="display:none"':''}><label class="f"><span>كلمة المرور</span><input type="password" id="lp" autocomplete="current-password" data-enter="login"></label></div>
+${noPwFlag()?`<p class="muted small" style="margin:-4px 0 12px">الدخول للمعلمين باسم المستخدم فقط. <button class="btn sm ghost" data-act="showPw" style="color:var(--br)">دخول بكلمة المرور (للوكيل)</button></p>`:''}
 <button class="btn primary" style="width:100%" data-act="login">دخول</button></div></div>`}
 function setupHTML(){return`<div class="auth"><div class="card"><h1>إعداد النظام لأول مرة</h1><p class="muted">سيتم إنشاء حساب الوكيل (المدير). بعدها تضيف الفصول والطلاب والمعلمين من لوحة التحكم.</p>
 <label class="f"><span>اسم المدرسة</span><input type="text" id="su-school"></label>
@@ -743,31 +750,310 @@ async function deleteClass(cid){
   }catch(e){toast(errMsg(e),'bad')}
 }
 
+/* ================= رابط الموقع + الدخول بدون كلمة مرور + بطاقات الحساب ================= */
+const autoLink=()=>location.origin+location.pathname;
+const siteLink=()=>nrm(S.settings.siteUrl)||autoLink();
+/* كلمة المرور الداخلية عند تفعيل «الدخول باسم المستخدم فقط» (تُحسب من اسم المستخدم) */
+const AUTO_SALT='9731';
+const autoPw=un=>'auto.'+String(un||'').toLowerCase()+'.'+AUTO_SALT;
+const noPwOn=()=>!!S.settings.noPw;
+const noPwFor=u=>noPwOn()&&u&&u.role!=='admin';
+/* نتذكر الخيار في هذا الجهاز لإخفاء حقل كلمة المرور في صفحة الدخول قبل تسجيل الدخول */
+const setNoPwFlag=v=>{try{localStorage.setItem('att-nopw',v?'1':'0')}catch(e){}};
+const noPwFlag=()=>{try{return localStorage.getItem('att-nopw')==='1'}catch(e){return false}};
+const DEF_WA=`مرحباً أ. {name} 👋
+تم إنشاء حسابك في نظام تحضير الطلاب بـ {school}.
+
+🔗 رابط الموقع:
+{link}
+
+👤 اسم المستخدم: {user}
+🔑 كلمة المرور: {pass}
+
+نتمنى لك التوفيق، وفي حال واجهتك أي مشكلة تواصل معنا.`;
+
+/* ---------- حفظ بيانات الدخول (كلمة المرور والجوال) لاستخدامها في الرسالة والبطاقة ----------
+   النظام لا يخزّن كلمات المرور في حساب المصادقة، لذا نحفظ نسخة في هذا الجهاز،
+   ومع خيار المزامنة تُحفظ أيضاً في قاعدة البيانات ليراها الوكيل من أي جهاز. */
+const VKEY='att-cards-v1';
+function vaultRead(){try{return JSON.parse(localStorage.getItem(VKEY)||'{}')||{}}catch(e){return{}}}
+function vaultAll(){if(!S.vault)S.vault=vaultRead();return S.vault}
+function vaultGet(uid){return vaultAll()[uid]||{}}
+function vaultWrite(){try{localStorage.setItem(VKEY,JSON.stringify(vaultAll()))}catch(e){}}
+async function vaultSet(uid,patch){
+  if(!uid)return;
+  const v=vaultAll();v[uid]={...(v[uid]||{}),...patch,at:nowMs()};vaultWrite();
+  if(S.settings.syncPw){try{await S.db.doc('meta/tcards').mutate(cur=>({map:{...((cur&&cur.map)||{}),[uid]:v[uid]}}))}catch(e){console.warn('تعذرت مزامنة بيانات البطاقات',e)}}
+}
+async function vaultPull(){
+  if(!S.settings.syncPw)return false;
+  try{
+    const d=await S.db.doc('meta/tcards').get();if(!d.exists)return false;
+    const m=d.data().map||{},v=vaultAll();let ch=false;
+    for(const [k,o] of Object.entries(m)){const c=v[k];if(!c||(o.at||0)>(c.at||0)){v[k]=o;ch=true}}
+    if(ch)vaultWrite();
+    return ch;
+  }catch(e){return false}
+}
+const pwKnown=u=>noPwFor(u)||!!vaultGet(u.id).pw;
+
+/* ---------- رسالة الواتساب ---------- */
+function waPhone(p){
+  let d=digits(String(p||'')).replace(/\D/g,'');
+  if(!d)return'';
+  if(d.startsWith('00'))d=d.slice(2);
+  if(d.startsWith('966'))return d;
+  if(d.startsWith('0'))return '966'+d.slice(1);
+  if(/^5\d{8}$/.test(d))return '966'+d;
+  return d;
+}
+function waText(u){
+  const pass=noPwFor(u)?'الدخول باسم المستخدم فقط (بدون كلمة مرور)':(vaultGet(u.id).pw||'(اطلبها من الوكيل)');
+  return String(S.settings.waTpl||DEF_WA)
+    .replace(/\{name\}/g,u.name).replace(/\{school\}/g,schoolName())
+    .replace(/\{link\}/g,siteLink()).replace(/\{user\}/g,u.username).replace(/\{pass\}/g,pass);
+}
+function waUser(uid){
+  const u=S.users.find(x=>x.id===uid);if(!u)return;
+  if(!pwKnown(u))return pwPrompt(u,()=>waUser(uid));
+  const v=vaultGet(u.id);
+  openModal('إرسال بيانات الدخول عبر واتساب',
+`<label class="f"><span>جوال المعلم (اتركه فارغاً لاختيار جهة الاتصال من واتساب)</span><input type="text" id="wa-ph" dir="ltr" placeholder="05xxxxxxxx" value="${esc(v.phone||'')}"></label>
+<label class="f" style="margin-bottom:6px"><span>نص الرسالة</span><textarea id="wa-tx" rows="10" style="width:100%;border:1px solid var(--ln);border-radius:10px;padding:10px 12px;background:var(--sf);resize:vertical">${esc(waText(u))}</textarea></label>
+<p class="muted small" style="margin:0">يمكنك تعديل النص الافتراضي من تبويب الإعدادات.</p>`,
+  [{t:'إلغاء',close:true},{t:'فتح واتساب',cls:'primary',fn:()=>{
+    const raw=val('wa-ph'),ph=waPhone(raw),tx=val('wa-tx');
+    const url='https://wa.me/'+ph+'?text='+encodeURIComponent(tx);
+    const w=window.open(url,'_blank');if(!w)location.href=url;
+    vaultSet(u.id,{phone:nrm(raw)});
+  }}],{nofocus:true});
+}
+/* عند عدم معرفة كلمة المرور: تعيين واحدة جديدة وحفظها، أو المتابعة بدونها */
+function pwPrompt(u,next){
+  const gen=genPassword(8);
+  openModal('كلمة المرور غير محفوظة',
+`<p style="margin-top:0" class="muted">كلمة مرور <b>${esc(u.name)}</b> غير محفوظة على هذا الجهاز (لا يخزّن النظام كلمات المرور بعد إنشائها). يمكنك تعيين كلمة مرور جديدة الآن فتُحفظ وتظهر في الرسالة والبطاقة.</p>
+<label class="f" style="margin-bottom:0"><span>كلمة المرور الجديدة</span><input type="text" id="np-pw" dir="ltr" value="${esc(gen)}"></label>`,
+  [{t:'متابعة بدونها',fn:()=>{closeModal();next();return false}},
+   {t:'تعيين وحفظ',cls:'primary',fn:async()=>{
+      const pw=val('np-pw').trim();
+      if(pw.length<6){toast('كلمة المرور 6 أحرف على الأقل','bad');return false}
+      const {error}=await sb.rpc('admin_set_password',{p_id:u.id,p_pw:pw});
+      if(error)throw dbErr(error);
+      await vaultSet(u.id,{pw});toast('تم تعيين كلمة المرور وحفظها','ok');
+      closeModal();next();return false;
+   }}],{nofocus:true});
+}
+
+/* ---------- بطاقات الدخول (مقاس بطاقة العمل 85.6×54 ملم) ---------- */
+function qrDataUrl(text,size){
+  return new Promise(res=>{
+    if(!window.QRCode){res('');return}
+    try{
+      const box=document.createElement('div');
+      box.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';
+      document.body.appendChild(box);
+      new QRCode(box,{text,width:size||300,height:size||300,colorDark:'#0f2a26',colorLight:'#ffffff',correctLevel:QRCode.CorrectLevel.M});
+      const done=u=>{try{box.remove()}catch(e){}res(u||'')};
+      setTimeout(()=>{
+        const c=box.querySelector('canvas');
+        if(c){let u='';try{u=c.toDataURL('image/png')}catch(e){}return done(u)}
+        const im=box.querySelector('img');
+        if(im&&im.src){if(im.complete)return done(im.src);im.onload=()=>done(im.src);im.onerror=()=>done('');return}
+        done('');
+      },90);
+    }catch(e){res('')}
+  });
+}
+function cardHTML(u,link,qr){
+  const np=noPwFor(u),pw=vaultGet(u.id).pw||'';
+  return`<div class="bc"><div class="bc-i">
+<div class="bc-h"><span class="bc-lg">✓</span><div class="bc-t"><b>${esc(schoolName())}</b><small>نظام تحضير الطلاب</small></div></div>
+<div class="bc-n">${esc(u.name)}</div>
+<div class="bc-r"><span>اسم المستخدم</span><b dir="ltr">${esc(u.username)}</b></div>
+${np?`<div class="bc-r"><span>كلمة المرور</span><b>الدخول باسم المستخدم فقط</b></div>`:`<div class="bc-r"><span>كلمة المرور</span><b dir="ltr">${pw?esc(pw):'—'}</b></div>`}
+<div class="bc-l" dir="ltr">${esc(link)}</div></div>
+<div class="bc-q">${qr?`<img src="${qr}" alt="QR">`:`<div class="bc-nq">تعذّر إنشاء<br>رمز QR</div>`}<span>امسح للدخول</span></div></div>`;
+}
+function cardsDoc(users,link,qr){
+  return`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>بطاقات الدخول — ${esc(schoolName())}</title>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+@page{size:A4;margin:10mm}
+*{box-sizing:border-box}
+body{margin:0;padding:6mm;background:#fff;color:#10201c;font-family:'Tajawal','Segoe UI',Tahoma,'Noto Naskh Arabic',Arial,sans-serif;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.tb{display:flex;gap:8px;align-items:center;margin-bottom:6mm;font-size:14px;color:#5a6c67}
+.tb button{font:inherit;border:1px solid #0f766e;background:#0f766e;color:#fff;border-radius:8px;padding:8px 18px;cursor:pointer}
+.sheet{display:flex;flex-wrap:wrap;gap:4mm;align-content:flex-start}
+.bc{width:85.6mm;height:54mm;border:0.3mm dashed #b9c9c5;border-radius:3mm;padding:4mm;display:flex;gap:2.5mm;background:#fff;overflow:hidden;page-break-inside:avoid;break-inside:avoid}
+.bc-i{flex:1;min-width:0;display:flex;flex-direction:column;gap:1.3mm}
+.bc-h{display:flex;align-items:center;gap:2mm;border-bottom:0.3mm solid #e3ecea;padding-bottom:1.6mm}
+.bc-lg{width:7mm;height:7mm;border-radius:2mm;background:#0f766e;color:#fff;display:flex;align-items:center;justify-content:center;font-size:4mm;font-weight:800;flex:none}
+.bc-t{min-width:0}
+.bc-t b{display:block;font-size:3.4mm;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bc-t small{font-size:2.5mm;color:#6b7c77}
+.bc-n{font-size:4.3mm;font-weight:700;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bc-r{display:flex;justify-content:space-between;align-items:baseline;gap:2mm;font-size:3mm;border-bottom:0.2mm dotted #e3ecea;padding-bottom:1mm}
+.bc-r span{color:#6b7c77;flex:none}
+.bc-r b{font-weight:700;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bc-l{font-size:2.6mm;color:#0f766e;word-break:break-all;margin-top:auto;line-height:1.35}
+.bc-q{width:25mm;flex:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1mm}
+.bc-q img{width:24mm;height:24mm;display:block}
+.bc-nq{width:24mm;height:24mm;border:0.3mm dashed #c9d5d2;border-radius:2mm;display:flex;align-items:center;justify-content:center;text-align:center;font-size:2.4mm;color:#8b9a96}
+.bc-q span{font-size:2.3mm;color:#6b7c77}
+@media print{.tb{display:none}body{padding:0}}
+</style></head><body>
+<div class="tb"><button onclick="window.print()">طباعة</button><span>${users.length} بطاقة — مقاس 8.5×5.4 سم، اطبعها على A4 ثم قصّها على الحدود.</span></div>
+<div class="sheet">${users.map(u=>cardHTML(u,link,qr)).join('')}</div>
+</body></html>`;
+}
+async function printCards(users,title){
+  if(!users||!users.length){toast('لا يوجد حسابات لطباعة بطاقاتها','bad');return}
+  const link=siteLink(),qr=await qrDataUrl(link,320);
+  if(!qr)toast('تعذّر إنشاء رمز QR (تحقق من الاتصال بالإنترنت)','bad');
+  const html=cardsDoc(users,link,qr);
+  openModal(title||'بطاقات الدخول',
+`<p class="muted small" style="margin-top:0">معاينة البطاقات قبل الطباعة. إن لم تعمل الطباعة مباشرة استخدم «فتح في نافذة».</p>
+<iframe id="cardfr" title="بطاقات" style="width:100%;height:56vh;border:1px solid var(--ln);border-radius:12px;background:#fff"></iframe>`,
+  [{t:'إغلاق',close:true},
+   {t:'فتح في نافذة',fn:()=>{
+      const w=window.open('','_blank');
+      if(!w){toast('المتصفح منع فتح النافذة، اسمح بالنوافذ المنبثقة','bad');return false}
+      w.document.open();w.document.write(html);w.document.close();return false;
+   }},
+   {t:'طباعة',cls:'primary',fn:()=>{
+      const f=document.getElementById('cardfr');
+      try{f.contentWindow.focus();f.contentWindow.print()}catch(e){toast('تعذّرت الطباعة، جرّب «فتح في نافذة»','bad')}
+      return false;
+   }}],{wide:true,nofocus:true});
+  const f=document.getElementById('cardfr');
+  if(f){const d=f.contentDocument;d.open();d.write(html);d.close()}
+}
+function cardUser(uid){
+  const u=S.users.find(x=>x.id===uid);if(!u)return;
+  if(!pwKnown(u))return pwPrompt(u,()=>cardUser(uid));
+  printCards([u],'بطاقة: '+u.name);
+}
+const sortedUsers=()=>S.users.slice().sort((a,b)=>(a.role==='admin'?0:1)-(b.role==='admin'?0:1)||cmpAr(a.name,b.name));
+function printAllCards(){
+  const us=sortedUsers();
+  if(!us.length){toast('لا يوجد مستخدمون','bad');return}
+  const miss=us.filter(u=>!pwKnown(u));
+  if(!miss.length)return printCards(us,'بطاقات جميع الحسابات');
+  openModal('كلمات مرور غير محفوظة',
+`<p style="margin-top:0" class="muted">${miss.length} من الحسابات كلمات مرورها غير محفوظة على هذا الجهاز. يمكنك توليد كلمات مرور جديدة لها الآن (سيتم تغييرها فعلياً وتُطبع في البطاقات) أو طباعة بطاقاتها بدون كلمة المرور.</p>
+<div id="pa-prog" class="muted small"></div>`,
+  [{t:'إلغاء',close:true},
+   {t:'طباعة بدونها',fn:()=>{closeModal();printCards(us,'بطاقات جميع الحسابات');return false}},
+   {t:'توليد وطباعة',cls:'primary',fn:async()=>{
+      const p=$('#pa-prog');let n=0;
+      for(const u of miss){
+        n++;if(p)p.textContent=`جاري تعيين كلمات المرور ${n} من ${miss.length}…`;
+        const pw=genPassword(8);
+        const {error}=await sb.rpc('admin_set_password',{p_id:u.id,p_pw:pw});
+        if(error){toast(errMsg(dbErr(error)),'bad');break}
+        await vaultSet(u.id,{pw});
+      }
+      closeModal();printCards(sortedUsers(),'بطاقات جميع الحسابات');return false;
+   }}],{nofocus:true});
+}
+
+/* ---------- منح جميع المعلمين كل الفصول ---------- */
+async function setAllClassesForAll(on){
+  const tch=S.users.filter(u=>u.role!=='admin');
+  if(!tch.length){toast('لا يوجد معلمون','bad');render();return}
+  const ok=await askConfirm(on?'كل الفصول لكل المعلمين':'إلغاء كل الفصول',
+    on?`سيتم منح جميع المعلمين (${tch.length}) صلاحية الوصول إلى <b>جميع الفصول</b>، بما فيها الفصول التي تضيفها لاحقاً.`
+      :`سيعود كل معلم إلى الفصول المسندة له فقط. هل تريد المتابعة؟`,
+    on?'منح الجميع':'إلغاء',false);
+  if(!ok){render();return}
+  let n=0;
+  try{
+    for(const u of tch){
+      const perms={...(u.perms||{}),allClasses:on};
+      const {error}=await sb.rpc('admin_save_user',{p_id:u.id,p_email:toEmail(u.username),p_username:u.username,p_name:u.name,p_role:u.role,p_active:u.active!==false,p_class_ids:u.classIds||[],p_perms:perms});
+      if(error)throw dbErr(error);
+      u.perms=perms;n++;
+    }
+    toast(on?`تم منح ${n} معلماً جميع الفصول`:'تم إلغاء الوصول لكل الفصول','ok');
+  }catch(e){toast(errMsg(e),'bad')}
+  S.dataSig=null;scheduleRefresh(50);render();
+}
+
+/* ---------- الدخول بدون كلمة مرور ---------- */
+async function toggleNoPw(on){
+  const tch=S.users.filter(u=>u.role!=='admin');
+  const ok=await askConfirm(on?'دخول المعلمين بدون كلمة مرور':'إيقاف الدخول بدون كلمة مرور',
+    on?`سيتم ضبط كلمة مرور داخلية تلقائية لجميع المعلمين (${tch.length}) ليصبح دخولهم باسم المستخدم فقط.<br><br><b>تنبيه أمني:</b> أي شخص يعرف اسم المستخدم سيستطيع الدخول إلى حساب المعلم. حساب الوكيل يبقى بكلمة مرور.`
+      :`سيعود المعلمون للدخول بكلمة مرور. كلمات مرورهم الحالية تلقائية ويمكن تخمينها، لذا يُنصح بتوليد كلمات مرور جديدة بعد الإيقاف.`,
+    on?'تفعيل':'إيقاف',false);
+  if(!ok){render();return}
+  try{
+    if(on){
+      let n=0;
+      for(const u of tch){
+        const pw=autoPw(u.username);
+        const {error}=await sb.rpc('admin_set_password',{p_id:u.id,p_pw:pw});
+        if(error)throw dbErr(error);
+        await vaultSet(u.id,{pw});n++;
+      }
+      await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),noPw:true}));
+      S.settings.noPw=true;setNoPwFlag(true);
+      toast(`تم التفعيل${n?` لـ ${n} معلم`:''}`,'ok');
+    }else{
+      await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),noPw:false}));
+      S.settings.noPw=false;setNoPwFlag(false);
+      toast('تم إيقاف الدخول بدون كلمة مرور','ok');
+      if(tch.length&&await askConfirm('كلمات المرور','هل تريد توليد كلمات مرور جديدة عشوائية لجميع المعلمين الآن؟ (اطبع البطاقات بعدها لتسليمهم إياها)','توليد',false)){
+        for(const u of tch){
+          const pw=genPassword(8);
+          const {error}=await sb.rpc('admin_set_password',{p_id:u.id,p_pw:pw});
+          if(error)throw dbErr(error);
+          await vaultSet(u.id,{pw});
+        }
+        toast('تم توليد كلمات مرور جديدة','ok');
+      }
+    }
+  }catch(e){toast(errMsg(e),'bad')}
+  S.sd=null;S.dataSig=null;scheduleRefresh(50);render();
+}
+
 /* ================= المعلمون ================= */
 function teachersHTML(){
   const me=curUser();
-  return`<div class="bar"><h3 style="margin:0">المستخدمون (${S.users.length})</h3><span class="sp"></span><button class="btn" data-act="importTch">استيراد من Excel</button><button class="btn primary" data-act="addUser">+ إضافة معلم</button></div>
+  const tch=S.users.filter(u=>u.role!=='admin');
+  const allOn=!!tch.length&&tch.every(u=>u.perms&&u.perms.allClasses);
+  return`<div class="bar"><h3 style="margin:0">المستخدمون (${S.users.length})</h3><span class="sp"></span><button class="btn" data-act="printAllCards">🖨️ طباعة جميع البطاقات</button><button class="btn" data-act="importTch">استيراد من Excel</button><button class="btn primary" data-act="addUser">+ إضافة معلم</button></div>
+<div class="optbar"><label class="ck"><input type="checkbox" data-chg="allcls" ${allOn?'checked':''}> <b>كل الفصول لكل المعلمين</b></label>
+<span class="muted small">يمنح جميع المعلمين (${tch.length}) الوصول إلى كل الفصول، بما فيها ما تضيفه لاحقاً.</span>
+<span class="sp" style="flex:1"></span>${noPwOn()?'<span class="pill in">الدخول باسم المستخدم فقط مفعّل</span>':''}</div>
 <div class="card tw"><table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الدور</th><th>الفصول</th><th>الصلاحيات</th><th>الحالة</th><th></th></tr></thead><tbody>
 ${S.users.slice().sort((a,b)=>(a.role==='admin'?0:1)-(b.role==='admin'?0:1)||cmpAr(a.name,b.name)).map(u=>{
   const adm=u.role==='admin';const cls=adm||(u.perms&&u.perms.allClasses)?'كل الفصول':(u.classIds||[]).map(cname).join('، ')||'—';
   const pr=adm?'كاملة':PERMS.filter(p=>u.perms&&u.perms[p[0]]).map(p=>p[1]).join('، ')||'—';
   return`<tr><td><b>${esc(u.name)}</b>${u.id===me.id?' <span class="pill in">أنت</span>':''}</td><td dir="ltr" style="text-align:right">${esc(u.username)}</td><td>${adm?'<span class="pill in">وكيل</span>':'معلم'}</td><td class="wrapc small">${esc(cls)}</td><td class="wrapc small">${esc(pr)}</td><td>${u.active===false?'<span class="pill bad">موقوف</span>':'<span class="pill ok">نشط</span>'}</td>
-<td><button class="btn sm" data-act="editUser" data-uid="${esc(u.id)}">تعديل</button> ${u.id!==me.id?`<button class="btn sm" data-act="togUser" data-uid="${esc(u.id)}">${u.active===false?'تفعيل':'إيقاف'}</button> <button class="btn sm ghost" data-act="delUser" data-uid="${esc(u.id)}" style="color:var(--bad)">حذف</button>`:''}</td></tr>`}).join('')}</tbody></table></div>
-<p class="muted small">ملاحظة: الصلاحيات ووقت التحضير تُفرض داخل قاعدة البيانات نفسها، فلا يستطيع المعلم تجاوزها من المتصفح. اسم المستخدم لا يتغيّر بعد الإنشاء، وإيقاف الحساب يسري فوراً.</p>`;
+<td><button class="btn sm" data-act="editUser" data-uid="${esc(u.id)}">تعديل</button> <button class="btn sm wa" data-act="waUser" data-uid="${esc(u.id)}" title="إرسال بيانات الدخول عبر واتساب">واتساب</button> <button class="btn sm" data-act="cardUser" data-uid="${esc(u.id)}" title="طباعة بطاقة الدخول">بطاقة</button> ${u.id!==me.id?`<button class="btn sm" data-act="togUser" data-uid="${esc(u.id)}">${u.active===false?'تفعيل':'إيقاف'}</button> <button class="btn sm ghost" data-act="delUser" data-uid="${esc(u.id)}" style="color:var(--bad)">حذف</button>`:''}</td></tr>`}).join('')}</tbody></table></div>
+<p class="muted small">ملاحظة: الصلاحيات ووقت التحضير تُفرض داخل قاعدة البيانات نفسها، فلا يستطيع المعلم تجاوزها من المتصفح. اسم المستخدم لا يتغيّر بعد الإنشاء، وإيقاف الحساب يسري فوراً.</p>
+<p class="muted small">كلمات المرور لا تُخزَّن في حساب المصادقة؛ يحفظ النظام نسخة منها في هذا الجهاز لاستخدامها في رسالة الواتساب والبطاقة، ويمكن مزامنتها بين الأجهزة من الإعدادات.</p>`;
 }
 function userModal(uid){
   const u=uid?S.users.find(x=>x.id===uid):null;const p=(u&&u.perms)||{mark:true,editSaved:true,stats:true};const adm=u&&u.role==='admin';
+  const v=u?vaultGet(u.id):{};const hidePw=noPwOn()&&!adm;
   openModal(u?'تعديل مستخدم':'إضافة معلم',`<label class="f"><span>الاسم</span><input type="text" id="u-name" value="${esc(u?u.name:'')}"></label>
 <label class="f"><span>${u?'اسم المستخدم (لا يمكن تغييره)':'اسم المستخدم (إنجليزي بدون مسافات، 3 أحرف على الأقل)'}</span><input type="text" id="u-un" dir="ltr" autocapitalize="off" autocomplete="off" value="${esc(u?u.username:'')}" ${u?'readonly':''}></label>
+<label class="f"><span>جوال المعلم (اختياري — يُستخدم لزر الواتساب)</span><input type="text" id="u-ph" dir="ltr" autocomplete="off" placeholder="05xxxxxxxx" value="${esc(v.phone||'')}"></label>
+<div id="u-pwbox" ${hidePw?'style="display:none"':''}>
 <label class="f"><span>${u?'كلمة مرور جديدة (اتركها فارغة بدون تغيير)':'كلمة المرور (6 أحرف على الأقل)'}</span><input type="password" id="u-pw" dir="ltr" autocomplete="new-password"></label>
-<div class="bar" style="margin-top:-4px"><label class="ck"><input type="checkbox" data-chg="showpw" data-for="u-pw"> إظهار كلمة المرور</label><button type="button" class="btn sm" data-act="genpw">توليد كلمة مرور</button></div>
+<div class="bar" style="margin-top:-4px"><label class="ck"><input type="checkbox" data-chg="showpw" data-for="u-pw"> إظهار كلمة المرور</label><button type="button" class="btn sm" data-act="genpw">توليد كلمة مرور</button></div></div>
+${noPwOn()?'<div class="note" style="margin-bottom:12px">الدخول بدون كلمة مرور مفعّل: يُنشأ حساب المعلم بكلمة مرور داخلية تلقائية ويدخل باسم المستخدم فقط.</div>':''}
 <label class="f"><span>الدور</span><select id="u-role" data-chg="urole"><option value="teacher" ${adm?'':'selected'}>معلم</option><option value="admin" ${adm?'selected':''}>وكيل (صلاحيات كاملة)</option></select></label>
 <div id="u-tbox" style="${adm?'display:none':''}">
 <div class="f"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الفصول المسندة</span><div class="ckbox">${S.classes.map(c=>`<label class="ck"><input type="checkbox" name="u-cls" value="${esc(c.id)}" ${u&&(u.classIds||[]).includes(c.id)?'checked':''}> ${esc(c.name)}</label>`).join('')||'<span class="muted small">لا توجد فصول</span>'}</div></div>
 <div class="f"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الصلاحيات</span><div class="ckbox" style="max-height:none">${PERMS.map(pp=>`<label class="ck"><input type="checkbox" name="u-perm" value="${pp[0]}" ${p[pp[0]]?'checked':''}> ${pp[1]}</label>`).join('')}</div></div></div>
 <label class="ck"><input type="checkbox" id="u-act" ${u&&u.active===false?'':'checked'}> الحساب نشط</label>`,
   [{t:'إلغاء',close:true},{t:'حفظ',cls:'primary',fn:async()=>{
-    const name=nrm(val('u-name')),un=nrm(val('u-un')).toLowerCase().replace(/\s/g,''),pw=val('u-pw'),role=val('u-role'),active=chk('u-act');
+    const name=nrm(val('u-name')),un=nrm(val('u-un')).toLowerCase().replace(/\s/g,''),role=val('u-role'),active=chk('u-act');
+    const phone=nrm(val('u-ph')),auto=noPwOn()&&role!=='admin',pw=auto?autoPw(un):val('u-pw');
     if(!name||!un){toast('الاسم واسم المستخدم مطلوبان','bad');return false}
     if(!u){
       if(!UN_RE.test(un)){toast('اسم المستخدم: من 3 إلى 30 حرفاً إنجليزياً أو أرقاماً أو ( . _ - ) بدون مسافات','bad');return false}
@@ -778,12 +1064,14 @@ function userModal(uid){
     const perms={};document.querySelectorAll('input[name=u-perm]').forEach(e=>perms[e.value]=e.checked);
     const classIds=[...document.querySelectorAll('input[name=u-cls]:checked')].map(e=>e.value);
     if(!u){
-      await createTeacher({name,un,pw,role,active,classIds,perms});
+      const nid=await createTeacher({name,un,pw,role,active,classIds,perms});
+      await vaultSet(nid,{pw,phone});
       toast('تم حفظ المستخدم','ok');scheduleRefresh(50);return;
     }
     const {data:id,error}=await sb.rpc('admin_save_user',{p_id:uid,p_email:toEmail(un),p_username:un,p_name:name,p_role:role,p_active:active,p_class_ids:role==='admin'?[]:classIds,p_perms:role==='admin'?{}:perms});
     if(error)throw dbErr(error);
     if(u&&pw){const r2=await sb.rpc('admin_set_password',{p_id:id,p_pw:pw});if(r2.error)throw dbErr(r2.error)}
+    await vaultSet(uid,pw?{pw,phone}:{phone});
     toast('تم حفظ المستخدم','ok');scheduleRefresh(50);
   }}]);
 }
@@ -820,6 +1108,7 @@ function parseTeacherRows(rows){
       if(/مستخدم|username|user/.test(t)){if(m.un===undefined)m.un=j}
       else if(/مرور|سري|password|pass|pwd/.test(t)){if(m.pw===undefined)m.pw=j}
       else if(/فصل|فصو|صف|class/.test(t)){if(m.cls===undefined)m.cls=j}
+      else if(/جوال|هاتف|واتس|phone|mobile|whats/.test(t)){if(m.ph===undefined)m.ph=j}
       else if(/اسم|معلم|name|teacher/.test(t)){if(m.name===undefined)m.name=j}});
     if(m.name!==undefined){hi=i;map=m;break}
   }
@@ -828,7 +1117,7 @@ function parseTeacherRows(rows){
   for(let i=hi+1;i<rows.length;i++){
     const r=rows[i]||[];const name=nrm(r[map.name]);
     if(!name&&!r.some(x=>nrm(x)))continue;
-    out.push({name,un:map.un!==undefined?nrm(r[map.un]).toLowerCase().replace(/\s/g,''):'',pw:map.pw!==undefined?String(r[map.pw]??'').trim():'',cls:map.cls!==undefined?splitCls(r[map.cls]):[],gpw:genPassword(),gun:'t'+String(Math.floor(Math.random()*90000)+10000)});
+    out.push({name,un:map.un!==undefined?nrm(r[map.un]).toLowerCase().replace(/\s/g,''):'',pw:map.pw!==undefined?String(r[map.pw]??'').trim():'',cls:map.cls!==undefined?splitCls(r[map.cls]):[],ph:map.ph!==undefined?nrm(r[map.ph]):'',gpw:genPassword(),gun:'t'+String(Math.floor(Math.random()*90000)+10000)});
   }
   return{rows:out,found:hi>=0};
 }
@@ -839,7 +1128,7 @@ function tchBuild(){
   const clsNorm=new Map(S.classes.map(c=>[normKey(c.name),c.name]));
   const newCls=new Map(),items=[];let unknownCls=0;
   for(const r of im.rows){
-    const it={name:r.name,un:'',pw:'',pwAuto:false,unAuto:false,classKeys:[],classNames:[],status:'ok',note:''};
+    const it={name:r.name,un:'',pw:'',phone:r.ph||'',pwAuto:false,unAuto:false,classKeys:[],classNames:[],status:'ok',note:''};
     if(!r.name){it.status='noname';items.push(it);continue}
     if(r.un){it.un=r.un}else{
       it.unAuto=true;
@@ -851,7 +1140,8 @@ function tchBuild(){
       else if(usedU.has(it.un)){it.status='dup';it.note='اسم المستخدم موجود مسبقاً'}
     }
     if(it.status==='ok'){
-      if(r.pw){if(r.pw.length<6){it.status='badpw';it.note='كلمة المرور أقل من 6 أحرف'}else it.pw=r.pw}
+      if(noPwOn()){it.pw=autoPw(it.un);it.pwAuto=true}
+      else if(r.pw){if(r.pw.length<6){it.status='badpw';it.note='كلمة المرور أقل من 6 أحرف'}else it.pw=r.pw}
       else{it.pw=r.gpw;it.pwAuto=true}
     }
     if(it.status==='ok'){
@@ -869,7 +1159,7 @@ function tchBuild(){
   const ok=items.filter(i=>i.status==='ok'),dup=items.filter(i=>i.status==='dup').length,bad=items.filter(i=>['noname','badun','badpw'].includes(i.status)).length;
   const btn=$('#ti-go');if(btn&&!im.done){btn.disabled=!ok.length;btn.textContent=ok.length?`إنشاء ${ok.length} حساب`:'إنشاء الحسابات'}
   $('#ti-prev').innerHTML=`<div class="bar"><span class="pill ok">جاهز: ${ok.length}</span>${dup?`<span class="pill wn">مكرر سيُتخطى: ${dup}</span>`:''}${bad?`<span class="pill bad">صفوف غير صالحة: ${bad}</span>`:''}${newCls.size?`<span class="pill in">فصول جديدة: ${[...newCls.values()].map(esc).join('، ')}</span>`:''}${unknownCls?`<span class="pill wn">فصول غير موجودة سيتم تجاهلها: ${unknownCls}</span>`:''}</div>
-${ok.length?`<div class="tw card" style="padding:0"><table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة المرور</th><th>الفصول</th></tr></thead><tbody>${ok.slice(0,8).map(i=>`<tr><td>${esc(i.name)}</td><td dir="ltr" style="text-align:right">${esc(i.un)}${i.unAuto?' <span class="pill">تلقائي</span>':''}</td><td dir="ltr" style="text-align:right">${i.pwAuto?'<span class="pill">تلقائية</span>':'••••••'}</td><td class="wrapc small">${esc(i.classNames.join('، ')||'—')}</td></tr>`).join('')}</tbody></table></div>${ok.length>8?`<p class="muted small">… و${ok.length-8} آخرين</p>`:''}`:''}`;
+${ok.length?`<div class="tw card" style="padding:0"><table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة المرور</th><th>الفصول</th></tr></thead><tbody>${ok.slice(0,8).map(i=>`<tr><td>${esc(i.name)}</td><td dir="ltr" style="text-align:right">${esc(i.un)}${i.unAuto?' <span class="pill">تلقائي</span>':''}</td><td dir="ltr" style="text-align:right">${noPwOn()?'<span class="pill in">بدون كلمة مرور</span>':(i.pwAuto?'<span class="pill">تلقائية</span>':'••••••')}</td><td class="wrapc small">${esc(i.classNames.join('، ')||'—')}</td></tr>`).join('')}</tbody></table></div>${ok.length>8?`<p class="muted small">… و${ok.length-8} آخرين</p>`:''}`:''}`;
 }
 function tchResultsHTML(){
   const its=S.timp.items.filter(i=>i.status==='ok');
@@ -881,7 +1171,7 @@ function tchResultsHTML(){
 function importTeachersModal(){
   if(!S.classes.length){toast('أضف الفصول أولاً ثم استورد المعلمين','bad');return}
   S.timp=null;
-  openModal('استيراد المعلمين من Excel',`<p style="margin-top:0" class="muted">ارفع ملف Excel (.xlsx أو .xls أو .csv) بأعمدة: <b>الاسم، اسم المستخدم، كلمة المرور، الفصول</b>. اسم المستخدم وكلمة المرور اختياريان (يُولَّدان تلقائياً)، وافصل بين الفصول بفاصلة.</p>
+  openModal('استيراد المعلمين من Excel',`<p style="margin-top:0" class="muted">ارفع ملف Excel (.xlsx أو .xls أو .csv) بأعمدة: <b>الاسم، اسم المستخدم، كلمة المرور، الفصول، الجوال</b>. اسم المستخدم وكلمة المرور والجوال اختيارية، وافصل بين الفصول بفاصلة.</p>
 <div class="bar"><button class="btn sm" data-act="tplTch">تنزيل قالب جاهز</button></div>
 <input type="file" id="tchf" data-chg="tchfile" accept=".xlsx,.xls,.csv" style="width:100%">
 <div class="f" style="margin-top:12px"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الصلاحيات الافتراضية للمعلمين المستوردين</span><div class="ckbox" style="max-height:none">${PERMS.map(pp=>`<label class="ck"><input type="checkbox" name="ti-perm" value="${pp[0]}" ${['mark','editSaved','stats'].includes(pp[0])?'checked':''}> ${pp[1]}</label>`).join('')}</div></div>
@@ -907,7 +1197,7 @@ async function runTeacherImport(){
     const it=ok[n];
     if(stop){it.res='pending';continue}
     if(prog)prog.textContent=`جاري الإنشاء ${n+1} من ${ok.length}…`;
-    try{await createTeacher({name:it.name,un:it.un,pw:it.pw,classIds:it.classKeys.map(k=>clsId.get(k)).filter(Boolean),perms});it.res='ok'}
+    try{const nid=await createTeacher({name:it.name,un:it.un,pw:it.pw,classIds:it.classKeys.map(k=>clsId.get(k)).filter(Boolean),perms});await vaultSet(nid,{pw:it.pw,phone:it.phone||''});it.res='ok'}
     catch(e){it.res='fail';it.err=(e&&e.code==='P0001'?e.message:errMsg(e));if(e&&e.rate){stop=true}}
     await sleep(350);
   }
@@ -921,8 +1211,8 @@ async function runTeacherImport(){
 }
 function exportTchResults(){
   const im=S.timp;if(!im||!im.items)return;
-  const rows=[['الاسم','اسم المستخدم','كلمة المرور','الفصول','الحالة']];
-  im.items.filter(i=>i.status==='ok').forEach(i=>rows.push([i.name,i.un,i.res==='ok'?i.pw:'',i.classNames.join('، '),i.res==='ok'?'تم':i.res==='fail'?'فشل: '+(i.err||''):'لم يُنفَّذ']));
+  const rows=[['الاسم','اسم المستخدم','كلمة المرور','الفصول','الجوال','الحالة']];
+  im.items.filter(i=>i.status==='ok').forEach(i=>rows.push([i.name,i.un,i.res==='ok'?(noPwOn()?'بدون كلمة مرور':i.pw):'',i.classNames.join('، '),i.phone||'',i.res==='ok'?'تم':i.res==='fail'?'فشل: '+(i.err||''):'لم يُنفَّذ']));
   saveXlsx('حسابات-المعلمين.xlsx',[{name:'المعلمون',rows}]);
 }
 async function toggleUser(uid){
@@ -1057,6 +1347,15 @@ function settingsHTML(){
 <div class="f"><span class="muted" style="display:block;margin-bottom:6px;font-size:14px">أيام الدوام</span><div class="days">${DAYN.map((x,i)=>`<label><input type="checkbox" data-chg="sdday" data-d="${i}" ${(d.days||[]).includes(i)?'checked':''}> ${x}</label>`).join('')}</div></div>
 <div class="note" style="margin-bottom:12px">الوكيل يستطيع التحضير والتعديل في أي وقت. ويمكنك إعطاء معلم معيّن صلاحية «تجاوز وقت الإدخال» من تبويب المعلمون.</div>
 <button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div>
+<div class="card"><h3>دخول المعلمين وبطاقات الحساب</h3>
+<label class="f"><span>رابط الموقع (يظهر في رسالة الواتساب والبطاقة ورمز QR)</span><input type="text" id="sd-site" dir="ltr" data-inp="sdsite" value="${esc(d.siteUrl||'')}" placeholder="${esc(autoLink())}"></label>
+<div class="optbar" style="margin-bottom:8px"><label class="ck"><input type="checkbox" data-chg="sdnopw" ${S.settings.noPw?'checked':''}> <b>دخول المعلمين بدون كلمة مرور (اسم المستخدم فقط)</b></label></div>
+<p class="muted small" style="margin:0 0 14px">عند التفعيل تُضبط كلمة مرور داخلية تلقائية لكل معلم، ويكفيه كتابة اسم المستخدم في صفحة الدخول. <b>تنبيه:</b> أي شخص يعرف اسم المستخدم يستطيع الدخول لحساب المعلم، لذا استخدمه داخل المدرسة فقط. حساب الوكيل يبقى محمياً بكلمة مرور. (يُطبَّق فوراً عند التغيير)</p>
+<label class="f"><span>نص رسالة الواتساب الترحيبية</span><textarea id="sd-wa" rows="9" data-inp="sdwa" style="width:100%;border:1px solid var(--ln);border-radius:10px;padding:10px 12px;background:var(--sf);resize:vertical">${esc(d.waTpl||DEF_WA)}</textarea></label>
+<p class="muted small" style="margin:-6px 0 14px">المتغيرات المتاحة: <span dir="ltr">{name}</span> اسم المعلم، <span dir="ltr">{user}</span> اسم المستخدم، <span dir="ltr">{pass}</span> كلمة المرور، <span dir="ltr">{link}</span> رابط الموقع، <span dir="ltr">{school}</span> اسم المدرسة.</p>
+<div class="optbar" style="margin-bottom:8px"><label class="ck"><input type="checkbox" data-chg="sdsync" ${d.syncPw?'checked':''}> حفظ كلمات المرور في قاعدة البيانات لمزامنتها بين أجهزتك</label></div>
+<p class="muted small" style="margin:0 0 14px">افتراضياً تُحفظ كلمات المرور في هذا الجهاز فقط. فعّل المزامنة إن كنت تطبع البطاقات من جهاز آخر، مع العلم أنها ستُخزَّن نصاً في قاعدة البيانات.</p>
+<div class="bar" style="margin-bottom:0"><button class="btn" data-act="printAllCards">🖨️ طباعة جميع البطاقات</button><span class="sp"></span><button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div></div>
 <div class="card"><h3>حسابي</h3><button class="btn" data-act="myPw">تغيير كلمة المرور</button></div>`;
 }
 async function saveSettings(){
@@ -1064,7 +1363,7 @@ async function saveSettings(){
   if(hm(d.end)<=hm(d.start)){toast('وقت النهاية يجب أن يكون بعد وقت البداية','bad');return}
   try{
     /* نقرأ آخر نسخة من الخادم ونعدّل الحقول المعنية فقط (لا نمسح extendUntil) */
-    await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz}));
+    await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz,siteUrl:nrm(d.siteUrl||''),waTpl:String(d.waTpl||''),syncPw:!!d.syncPw}));
     toast('تم حفظ الإعدادات','ok');S.sd=null;render();
   }catch(e){toast(errMsg(e),'bad')}
 }
@@ -1092,11 +1391,25 @@ const ACT={
   async login(){
     if(S.busy)return;
     const un=nrm(val('lu')).toLowerCase().replace(/\s/g,''),pw=val('lp');
-    if(!un||!pw){toast('أدخل اسم المستخدم وكلمة المرور','bad');return}
+    if(!un){toast('أدخل اسم المستخدم','bad');return}
     S.busy=true;
     try{
-      const {data,error}=await sb.auth.signInWithPassword({email:toEmail(un),password:pw});
-      if(error){toast(error.status===400||error.code==='invalid_credentials'?'اسم المستخدم أو كلمة المرور غير صحيحة':authMsg(error),'bad');return}
+      /* بدون كلمة مرور: نجرّب الكلمة الداخلية التلقائية المرتبطة باسم المستخدم */
+      let r=await sb.auth.signInWithPassword({email:toEmail(un),password:pw||autoPw(un)});
+      if(r.error&&pw&&(r.error.status===400||r.error.code==='invalid_credentials')){
+        const r2=await sb.auth.signInWithPassword({email:toEmail(un),password:autoPw(un)});
+        if(!r2.error)r=r2;
+      }
+      const {data,error}=r;
+      if(error){
+        const bad=error.status===400||error.code==='invalid_credentials';
+        if(!pw&&bad){
+          const b=$('#lp-box');if(b)b.style.display='';setNoPwFlag(false);
+          const f=$('#lp');if(f)f.focus();
+          toast('هذا الحساب يحتاج كلمة مرور، أدخلها ثم أعد المحاولة','bad');return;
+        }
+        toast(bad?'اسم المستخدم أو كلمة المرور غير صحيحة':authMsg(error),'bad');return;
+      }
       let ok=false,failed=false;
       try{ok=await startSession(data.user.id)}catch(e){failed=true;console.error(e);toast(errMsg(e),'bad')}
       if(!ok){try{await sb.auth.signOut()}catch(e){}S.meId=null;S.phase='auth';render();if(!failed)toast('هذا الحساب موقوف أو غير مضاف للنظام، راجع الوكيل','bad')}
@@ -1133,6 +1446,7 @@ const ACT={
     const v=t.dataset.v,me=curUser();S.view=v;
     if(v==='attend'&&isAdmin(me)){const cid=(S.att&&S.att.cid)||(S.classes[0]&&S.classes[0].id);if(cid){openAttend(cid,(S.att&&S.att.date)||nowInfo().date);return}}
     if(v==='settings')S.sd=null;
+    if(v==='teachers')vaultPull().then(ch=>{if(ch&&S.view==='teachers')render()}).catch(()=>{});
     if(v==='stats'){initStats();if(S.st.recs)render();return}
     render();
   },
@@ -1154,8 +1468,10 @@ const ACT={
   tplStu(){saveXlsx('قالب-استيراد-الطلاب.xlsx',[{name:'الطلاب',rows:[['اسم الطالب','الفصل','رقم الطالب','جوال ولي الأمر'],['(اكتب اسم الطالب هنا)','(اسم الفصل كما هو في النظام)','','']]}])},
   addClass:addClassModal,renClass(t){renClassModal(t.dataset.cid)},delClass(t){deleteClass(t.dataset.cid)},
   importTch:importTeachersModal,tchResults:exportTchResults,
-  tplTch(){saveXlsx('قالب-استيراد-المعلمين.xlsx',[{name:'المعلمون',rows:[['الاسم','اسم المستخدم','كلمة المرور','الفصول'],['محمد أحمد','moh.ahmad','','أول / 1، أول / 2'],['سعد خالد','','','ثاني / 1']]}])},
+  tplTch(){saveXlsx('قالب-استيراد-المعلمين.xlsx',[{name:'المعلمون',rows:[['الاسم','اسم المستخدم','كلمة المرور','الفصول','الجوال'],['محمد أحمد','moh.ahmad','','أول / 1، أول / 2','0551234567'],['سعد خالد','','','ثاني / 1','']]}])},
   addUser(){userModal()},editUser(t){userModal(t.dataset.uid)},togUser(t){toggleUser(t.dataset.uid)},delUser(t){deleteUser(t.dataset.uid)},
+  waUser(t){waUser(t.dataset.uid)},cardUser(t){cardUser(t.dataset.uid)},printAllCards(){printAllCards()},
+  showPw(){const b=$('#lp-box');if(b)b.style.display='';setNoPwFlag(false);const f=$('#lp');if(f)f.focus()},
   stMode(t){S.st.mode=t.dataset.m;render()},
   pickStu(t){S.st.sid=t.dataset.sid;const i=S.idx.get(S.st.sid);S.st.q=i?i.n:'';render()},
   stExport:exportStats,
@@ -1165,6 +1481,8 @@ const INP={
   sq(t){S.stu.q=t.value;S.stu.lim=100;render()},
   sq2(t){S.st.q=t.value;S.st.sid=null;const r=$('#sres');if(r)r.innerHTML=stuResultsHTML(myClasses(curUser()));},
   sdschool(t){S.sd.schoolName=t.value},
+  sdsite(t){S.sd.siteUrl=t.value},
+  sdwa(t){S.sd.waTpl=t.value},
 };
 function paintAtt2(){const st=attStatus();const l=$('#att-list');if(l)l.innerHTML=attListHTML(!st.ok)}
 const CHG={
@@ -1174,7 +1492,10 @@ const CHG={
   sel(t){t.checked?S.stu.sel.add(t.dataset.sid):S.stu.sel.delete(t.dataset.sid);render()},
   selall(t){const shown=stuList().slice(0,S.stu.lim);shown.forEach(s=>t.checked?S.stu.sel.add(s.id):S.stu.sel.delete(s.id));render()},
   showpw(t){const i=document.getElementById(t.dataset.for);if(i)i.type=t.checked?'text':'password'},
-  urole(t){const b=$('#u-tbox');if(b)b.style.display=t.value==='admin'?'none':''},
+  urole(t){const b=$('#u-tbox');if(b)b.style.display=t.value==='admin'?'none':'';const p=$('#u-pwbox');if(p)p.style.display=(noPwOn()&&t.value!=='admin')?'none':''},
+  allcls(t){setAllClassesForAll(t.checked)},
+  sdnopw(t){toggleNoPw(t.checked)},
+  sdsync(t){S.sd.syncPw=t.checked},
   tchrebuild(){tchBuild()},
   tchfile(t){
     const f=t.files&&t.files[0];if(!f)return;
