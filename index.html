@@ -882,20 +882,39 @@ function waText(u){
     .replace(/\{name\}/g,u.name).replace(/\{school\}/g,schoolName())
     .replace(/\{link\}/g,siteLink()).replace(/\{user\}/g,u.username).replace(/\{pass\}/g,pass);
 }
+const isMobileDev=()=>/Android|iPhone|iPad|iPod|Mobile|Windows Phone/i.test(navigator.userAgent||'');
+function copyText(t){
+  try{if(navigator.clipboard&&navigator.clipboard.writeText)return navigator.clipboard.writeText(t)}catch(e){}
+  return new Promise(res=>{
+    const a=document.createElement('textarea');a.value=t;a.style.cssText='position:fixed;top:0;opacity:0';
+    document.body.appendChild(a);a.focus();a.select();
+    try{document.execCommand('copy')}catch(e){}
+    a.remove();res();
+  });
+}
 function waUser(uid){
   const u=S.users.find(x=>x.id===uid);if(!u)return;
   if(!pwKnown(u))return pwPrompt(u,()=>waUser(uid));
   const v=vaultGet(u.id);
   openModal('إرسال بيانات الدخول عبر واتساب',
-`<label class="f"><span>جوال المعلم (اتركه فارغاً لاختيار جهة الاتصال من واتساب)</span><input type="text" id="wa-ph" dir="ltr" placeholder="05xxxxxxxx" value="${esc(v.phone||'')}"></label>
+`<label class="f" style="margin-bottom:4px"><span>جوال المعلم</span><input type="tel" id="wa-ph" dir="ltr" inputmode="tel" data-inp="waph" placeholder="05xxxxxxxx" value="${esc(v.phone||'')}"></label>
+<p id="wa-hint" class="small" style="margin:0 0 6px;color:var(--ok);direction:ltr;text-align:right">${v.phone&&waPhone(v.phone)?'+'+waPhone(v.phone):''}</p>
+<p class="muted small" style="margin:0 0 12px">اكتب الرقم ليفتح واتساب على محادثة المعلم مباشرة، ويُحفظ الرقم لهذا المعلم للمرات القادمة. بدون رقم سيفتح واتساب على قائمة جهات الاتصال في الجوال فقط، أما على الكمبيوتر فاستخدم زر «نسخ الرسالة».</p>
 <label class="f" style="margin-bottom:6px"><span>نص الرسالة</span><textarea id="wa-tx" rows="10" style="width:100%;border:1px solid var(--ln);border-radius:10px;padding:10px 12px;background:var(--sf);resize:vertical">${esc(waText(u))}</textarea></label>
 <p class="muted small" style="margin:0">يمكنك تعديل النص الافتراضي من تبويب الإعدادات.</p>`,
-  [{t:'إلغاء',close:true},{t:'فتح واتساب',cls:'primary',fn:()=>{
-    const raw=val('wa-ph'),ph=waPhone(raw),tx=val('wa-tx');
-    const url='https://wa.me/'+ph+'?text='+encodeURIComponent(tx);
-    const w=window.open(url,'_blank');if(!w)location.href=url;
+  [{t:'إلغاء',close:true},
+   {t:'نسخ الرسالة',fn:()=>{copyText(val('wa-tx'));toast('تم نسخ الرسالة، الصقها في محادثة المعلم','ok');return false}},
+   {t:'فتح واتساب',cls:'primary',fn:()=>{
+    const raw=val('wa-ph'),ph=waPhone(raw),tx=val('wa-tx'),enc=encodeURIComponent(tx);
     vaultSet(u.id,{phone:nrm(raw)});
+    if(ph){const url='https://wa.me/'+ph+'?text='+enc;const w=window.open(url,'_blank');if(!w)location.href=url;return}
+    if(isMobileDev()){location.href='whatsapp://send?text='+enc;return}   /* يفتح قائمة جهات الاتصال في تطبيق الجوال */
+    copyText(tx);
+    toast('أدخل رقم الجوال ليفتح واتساب على محادثة المعلم — نسخنا الرسالة لك الآن','bad');
+    const i=$('#wa-ph');if(i)i.focus();
+    return false;
   }}],{nofocus:true});
+  if(!v.phone)setTimeout(()=>{const i=$('#wa-ph');if(i)i.focus()},60);
 }
 /* عند عدم معرفة كلمة المرور: تعيين واحدة جديدة وحفظها، أو المتابعة بدونها */
 function pwPrompt(u,next){
@@ -1555,6 +1574,7 @@ const INP={
   sq2(t){S.st.q=t.value;S.st.sid=null;const r=$('#sres');if(r)r.innerHTML=stuResultsHTML(myClasses(curUser()));},
   sdschool(t){S.sd.schoolName=t.value},
   sdsite(t){S.sd.siteUrl=t.value},
+  waph(t){const h=$('#wa-hint');if(h){const p=waPhone(t.value);h.textContent=p?'+'+p:''}},
   sdwa(t){S.sd.waTpl=t.value},
 };
 function paintAtt2(){const st=attStatus();const l=$('#att-list');if(l)l.innerHTML=attListHTML(!st.ok)}
