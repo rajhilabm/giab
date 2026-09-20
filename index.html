@@ -202,7 +202,7 @@ const canStats=u=>isAdmin(u)||(u.perms&&u.perms.stats);
    - استبدال Firebase بالكامل بـ Supabase.
    - يتم التحديث بالاستعلام الدوري بدلاً من الاشتراك اللحظي.
 */
-const SUPABASE_URL='https://giab.supabase.co';
+const SUPABASE_URL='https://qcssewwlffcbduykkoxa.supabase.co/rest/v1/';
 const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjc3Nld3dsZmZjYmR1eWtrb3hhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk4Nzg0MDYsImV4cCI6MjEwNTQ1NDQwNn0.xvRszfn4NwvZaNMqkaCndkdXt8y73DUkRd-6lwvhBXs';
 let sb=null;
 function deepClone(x){return JSON.parse(JSON.stringify(x??{}))}
