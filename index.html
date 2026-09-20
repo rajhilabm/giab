@@ -746,7 +746,7 @@ async function deleteClass(cid){
 /* ================= المعلمون ================= */
 function teachersHTML(){
   const me=curUser();
-  return`<div class="bar"><h3 style="margin:0">المستخدمون (${S.users.length})</h3><span class="sp"></span><button class="btn primary" data-act="addUser">+ إضافة معلم</button></div>
+  return`<div class="bar"><h3 style="margin:0">المستخدمون (${S.users.length})</h3><span class="sp"></span><button class="btn" data-act="importTch">استيراد من Excel</button><button class="btn primary" data-act="addUser">+ إضافة معلم</button></div>
 <div class="card tw"><table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>الدور</th><th>الفصول</th><th>الصلاحيات</th><th>الحالة</th><th></th></tr></thead><tbody>
 ${S.users.slice().sort((a,b)=>(a.role==='admin'?0:1)-(b.role==='admin'?0:1)||cmpAr(a.name,b.name)).map(u=>{
   const adm=u.role==='admin';const cls=adm||(u.perms&&u.perms.allClasses)?'كل الفصول':(u.classIds||[]).map(cname).join('، ')||'—';
@@ -777,26 +777,153 @@ function userModal(uid){
     if(u&&u.role==='admin'&&(role!=='admin'||!active)&&!S.users.some(x=>x.id!==uid&&x.role==='admin'&&x.active!==false)){toast('لا يمكن إزالة آخر وكيل نشط','bad');return false}
     const perms={};document.querySelectorAll('input[name=u-perm]').forEach(e=>perms[e.value]=e.checked);
     const classIds=[...document.querySelectorAll('input[name=u-cls]:checked')].map(e=>e.value);
-    const email=toEmail(un);
     if(!u){
-      /* 1) إنشاء حساب المصادقة عبر عميل مؤقت حتى لا نخرج من جلسة الوكيل */
-      const tmp=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false,storageKey:'att-tmp'}});
-      let r=await tmp.auth.signUp({email,password:pw});
-      if(r.error&&/already|registered/i.test(r.error.message||'')){
-        const c=await sb.rpc('admin_cleanup_orphan',{p_email:email});
-        if(c.error)throw dbErr(c.error);
-        if(!c.data){toast('اسم المستخدم مستخدم مسبقاً','bad');return false}
-        r=await tmp.auth.signUp({email,password:pw});
-      }
-      if(r.error){toast(authMsg(r.error),'bad');return false}
-      if(!r.data.session){toast('فعّل خيار تسجيل الحسابات بدون تأكيد البريد (Confirm email = OFF) في إعدادات Supabase','bad');return false}
+      await createTeacher({name,un,pw,role,active,classIds,perms});
+      toast('تم حفظ المستخدم','ok');scheduleRefresh(50);return;
     }
-    /* 2) ربط الحساب بملف المستخدم (الدور والفصول والصلاحيات) عبر دالة الوكيل */
-    const {data:id,error}=await sb.rpc('admin_save_user',{p_id:uid||null,p_email:email,p_username:un,p_name:name,p_role:role,p_active:active,p_class_ids:role==='admin'?[]:classIds,p_perms:role==='admin'?{}:perms});
+    const {data:id,error}=await sb.rpc('admin_save_user',{p_id:uid,p_email:toEmail(un),p_username:un,p_name:name,p_role:role,p_active:active,p_class_ids:role==='admin'?[]:classIds,p_perms:role==='admin'?{}:perms});
     if(error)throw dbErr(error);
     if(u&&pw){const r2=await sb.rpc('admin_set_password',{p_id:id,p_pw:pw});if(r2.error)throw dbErr(r2.error)}
     toast('تم حفظ المستخدم','ok');scheduleRefresh(50);
   }}]);
+}
+/* ---------- إنشاء حساب معلم (يستخدمه النموذج اليدوي واستيراد Excel) ---------- */
+const genPassword=(n=8)=>{const a='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';return Array.from(crypto.getRandomValues(new Uint8Array(n)),b=>a[b%a.length]).join('')};
+async function createTeacher({name,un,pw,role='teacher',active=true,classIds=[],perms={}}){
+  const email=toEmail(un),fail=(m,extra)=>Object.assign(new Error(m),{code:'P0001'},extra||{});
+  /* 1) إنشاء حساب المصادقة عبر عميل مؤقت حتى لا نخرج من جلسة الوكيل */
+  const tmp=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false,storageKey:'att-tmp'}});
+  let r=await tmp.auth.signUp({email,password:pw});
+  if(r.error&&/already|registered/i.test(r.error.message||'')){
+    const c=await sb.rpc('admin_cleanup_orphan',{p_email:email});
+    if(c.error)throw dbErr(c.error);
+    if(!c.data)throw fail('اسم المستخدم مستخدم مسبقاً');
+    r=await tmp.auth.signUp({email,password:pw});
+  }
+  if(r.error){
+    const rate=r.error.status===429||/rate limit|too many|over_/i.test((r.error.code||'')+' '+(r.error.message||''));
+    throw fail(rate?'وصلت للحد المسموح من Supabase لإنشاء الحسابات، انتظر بضع دقائق ثم أعد المحاولة':authMsg(r.error),{rate});
+  }
+  if(!r.data.session)throw fail('فعّل خيار تسجيل الحسابات بدون تأكيد البريد (Confirm email = OFF) في إعدادات Supabase');
+  /* 2) ربط الحساب بملف المستخدم (الدور والفصول والصلاحيات) عبر دالة الوكيل */
+  const {data:id,error}=await sb.rpc('admin_save_user',{p_id:null,p_email:email,p_username:un,p_name:name,p_role:role,p_active:active,p_class_ids:role==='admin'?[]:classIds,p_perms:role==='admin'?{}:perms});
+  if(error)throw dbErr(error);
+  return id;
+}
+
+/* ---------- استيراد المعلمين من Excel ---------- */
+const splitCls=t=>String(t||'').split(/[,،;؛\n]+/).map(nrm).filter(Boolean);
+function parseTeacherRows(rows){
+  let hi=-1,map={};
+  for(let i=0;i<Math.min(rows.length,6);i++){
+    const m={};(rows[i]||[]).forEach((c,j)=>{const t=normKey(nrm(c));if(!t)return;
+      if(/مستخدم|username|user/.test(t)){if(m.un===undefined)m.un=j}
+      else if(/مرور|سري|password|pass|pwd/.test(t)){if(m.pw===undefined)m.pw=j}
+      else if(/فصل|فصو|صف|class/.test(t)){if(m.cls===undefined)m.cls=j}
+      else if(/اسم|معلم|name|teacher/.test(t)){if(m.name===undefined)m.name=j}});
+    if(m.name!==undefined){hi=i;map=m;break}
+  }
+  if(hi<0)map={name:0,un:1,pw:2,cls:3};
+  const out=[];
+  for(let i=hi+1;i<rows.length;i++){
+    const r=rows[i]||[];const name=nrm(r[map.name]);
+    if(!name&&!r.some(x=>nrm(x)))continue;
+    out.push({name,un:map.un!==undefined?nrm(r[map.un]).toLowerCase().replace(/\s/g,''):'',pw:map.pw!==undefined?String(r[map.pw]??'').trim():'',cls:map.cls!==undefined?splitCls(r[map.cls]):[],gpw:genPassword(),gun:'t'+String(Math.floor(Math.random()*90000)+10000)});
+  }
+  return{rows:out,found:hi>=0};
+}
+function tchBuild(){
+  const im=S.timp;if(!im)return;
+  const auto=chk('ti-auto');
+  const usedU=new Set(S.users.map(u=>String(u.username).toLowerCase())),usedN=new Set(S.users.map(u=>normKey(u.name)));
+  const clsNorm=new Map(S.classes.map(c=>[normKey(c.name),c.name]));
+  const newCls=new Map(),items=[];let unknownCls=0;
+  for(const r of im.rows){
+    const it={name:r.name,un:'',pw:'',pwAuto:false,unAuto:false,classKeys:[],classNames:[],status:'ok',note:''};
+    if(!r.name){it.status='noname';items.push(it);continue}
+    if(r.un){it.un=r.un}else{
+      it.unAuto=true;
+      if(usedN.has(normKey(r.name))){it.status='dup';it.note='الاسم موجود مسبقاً';it.un='—'}
+      else{while(usedU.has(r.gun))r.gun='t'+String(Math.floor(Math.random()*90000)+10000);it.un=r.gun}
+    }
+    if(it.status==='ok'){
+      if(!UN_RE.test(it.un)){it.status='badun';it.note='اسم مستخدم غير صالح'}
+      else if(usedU.has(it.un)){it.status='dup';it.note='اسم المستخدم موجود مسبقاً'}
+    }
+    if(it.status==='ok'){
+      if(r.pw){if(r.pw.length<6){it.status='badpw';it.note='كلمة المرور أقل من 6 أحرف'}else it.pw=r.pw}
+      else{it.pw=r.gpw;it.pwAuto=true}
+    }
+    if(it.status==='ok'){
+      usedU.add(it.un);usedN.add(normKey(r.name));
+      for(const cn of r.cls){
+        const k=normKey(cn);
+        if(clsNorm.has(k)){if(!it.classKeys.includes(k)){it.classKeys.push(k);it.classNames.push(clsNorm.get(k))}}
+        else if(auto){if(!newCls.has(k))newCls.set(k,cn);if(!it.classKeys.includes(k)){it.classKeys.push(k);it.classNames.push(cn)}}
+        else unknownCls++;
+      }
+    }
+    items.push(it);
+  }
+  im.items=items;im.newCls=newCls;
+  const ok=items.filter(i=>i.status==='ok'),dup=items.filter(i=>i.status==='dup').length,bad=items.filter(i=>['noname','badun','badpw'].includes(i.status)).length;
+  const btn=$('#ti-go');if(btn&&!im.done){btn.disabled=!ok.length;btn.textContent=ok.length?`إنشاء ${ok.length} حساب`:'إنشاء الحسابات'}
+  $('#ti-prev').innerHTML=`<div class="bar"><span class="pill ok">جاهز: ${ok.length}</span>${dup?`<span class="pill wn">مكرر سيُتخطى: ${dup}</span>`:''}${bad?`<span class="pill bad">صفوف غير صالحة: ${bad}</span>`:''}${newCls.size?`<span class="pill in">فصول جديدة: ${[...newCls.values()].map(esc).join('، ')}</span>`:''}${unknownCls?`<span class="pill wn">فصول غير موجودة سيتم تجاهلها: ${unknownCls}</span>`:''}</div>
+${ok.length?`<div class="tw card" style="padding:0"><table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة المرور</th><th>الفصول</th></tr></thead><tbody>${ok.slice(0,8).map(i=>`<tr><td>${esc(i.name)}</td><td dir="ltr" style="text-align:right">${esc(i.un)}${i.unAuto?' <span class="pill">تلقائي</span>':''}</td><td dir="ltr" style="text-align:right">${i.pwAuto?'<span class="pill">تلقائية</span>':'••••••'}</td><td class="wrapc small">${esc(i.classNames.join('، ')||'—')}</td></tr>`).join('')}</tbody></table></div>${ok.length>8?`<p class="muted small">… و${ok.length-8} آخرين</p>`:''}`:''}`;
+}
+function tchResultsHTML(){
+  const its=S.timp.items.filter(i=>i.status==='ok');
+  const okN=its.filter(i=>i.res==='ok').length,failN=its.filter(i=>i.res==='fail').length,pend=its.filter(i=>i.res==='pending').length;
+  return`<div class="bar"><span class="pill ok">تم إنشاء: ${okN}</span>${failN?`<span class="pill bad">فشل: ${failN}</span>`:''}${pend?`<span class="pill wn">لم يُنفَّذ: ${pend}</span>`:''}<span class="sp"></span><button class="btn sm primary" data-act="tchResults">تنزيل كلمات المرور (Excel)</button></div>
+<div class="note" style="margin-bottom:10px">احفظ ملف كلمات المرور الآن وسلّمه للمعلمين. كلمات المرور لا تُخزَّن ولن تظهر مرة أخرى.${pend?' توقف الاستيراد لبلوغ حد Supabase؛ انتظر 5 دقائق ثم ارفع الملف نفسه مرة ثانية، ومن أُنشئ سابقاً سيُتخطى تلقائياً.':''}</div>
+<div class="tw card" style="padding:0;max-height:260px;overflow:auto"><table><thead><tr><th>الاسم</th><th>اسم المستخدم</th><th>كلمة المرور</th><th>الحالة</th></tr></thead><tbody>${its.map(i=>`<tr><td>${esc(i.name)}</td><td dir="ltr" style="text-align:right">${esc(i.un)}</td><td dir="ltr" style="text-align:right">${i.res==='ok'?esc(i.pw):'—'}</td><td>${i.res==='ok'?'<span class="pill ok">تم</span>':i.res==='fail'?`<span class="pill bad">فشل</span> <span class="small">${esc(i.err||'')}</span>`:'<span class="pill wn">لم يُنفَّذ</span>'}</td></tr>`).join('')}</tbody></table></div>`;
+}
+function importTeachersModal(){
+  if(!S.classes.length){toast('أضف الفصول أولاً ثم استورد المعلمين','bad');return}
+  S.timp=null;
+  openModal('استيراد المعلمين من Excel',`<p style="margin-top:0" class="muted">ارفع ملف Excel (.xlsx أو .xls أو .csv) بأعمدة: <b>الاسم، اسم المستخدم، كلمة المرور، الفصول</b>. اسم المستخدم وكلمة المرور اختياريان (يُولَّدان تلقائياً)، وافصل بين الفصول بفاصلة.</p>
+<div class="bar"><button class="btn sm" data-act="tplTch">تنزيل قالب جاهز</button></div>
+<input type="file" id="tchf" data-chg="tchfile" accept=".xlsx,.xls,.csv" style="width:100%">
+<div class="f" style="margin-top:12px"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الصلاحيات الافتراضية للمعلمين المستوردين</span><div class="ckbox" style="max-height:none">${PERMS.map(pp=>`<label class="ck"><input type="checkbox" name="ti-perm" value="${pp[0]}" ${['mark','editSaved','stats'].includes(pp[0])?'checked':''}> ${pp[1]}</label>`).join('')}</div></div>
+<label class="ck"><input type="checkbox" id="ti-auto" data-chg="tchrebuild" checked> إنشاء الفصول غير الموجودة تلقائياً</label>
+<p class="muted small" style="margin:8px 0">حد Supabase نحو 30 حساباً كل 5 دقائق. إن توقف الاستيراد فانتظر ثم أعد رفع الملف، ولن يتكرر من أُنشئ.</p>
+<div id="ti-prog" class="muted small"></div><div id="ti-prev"></div><div id="ti-out"></div>`,
+  [{t:'إغلاق',close:true,id:'ti-x'},{t:'إنشاء الحسابات',cls:'primary',id:'ti-go',fn:runTeacherImport}],{wide:true,nofocus:true});
+  const go=$('#ti-go');if(go)go.disabled=true;
+}
+async function runTeacherImport(){
+  const im=S.timp;if(!im)return false;
+  if(im.done)return true;
+  const ok=(im.items||[]).filter(i=>i.status==='ok');
+  if(!ok.length){toast('لا توجد صفوف صالحة للاستيراد','bad');return false}
+  const perms={};document.querySelectorAll('input[name=ti-perm]').forEach(e=>perms[e.value]=e.checked);
+  const clsId=new Map(S.classes.map(c=>[normKey(c.name),c.id]));
+  const prog=$('#ti-prog');
+  try{
+    for(const [k,name] of im.newCls){const id=rid('c');await S.db.doc('classes/'+id).set({name,created:Date.now()});clsId.set(k,id)}
+  }catch(e){toast(errMsg(e),'bad');return false}
+  let stop=false;
+  for(let n=0;n<ok.length;n++){
+    const it=ok[n];
+    if(stop){it.res='pending';continue}
+    if(prog)prog.textContent=`جاري الإنشاء ${n+1} من ${ok.length}…`;
+    try{await createTeacher({name:it.name,un:it.un,pw:it.pw,classIds:it.classKeys.map(k=>clsId.get(k)).filter(Boolean),perms});it.res='ok'}
+    catch(e){it.res='fail';it.err=(e&&e.code==='P0001'?e.message:errMsg(e));if(e&&e.rate){stop=true}}
+    await sleep(350);
+  }
+  im.done=true;
+  if(prog)prog.textContent='';
+  $('#ti-prev').innerHTML='';$('#ti-out').innerHTML=tchResultsHTML();
+  const go=$('#ti-go');if(go){go.textContent='إغلاق';go.disabled=false}
+  const x=$('#ti-x');if(x)x.style.display='none';
+  scheduleRefresh(50);
+  return false;
+}
+function exportTchResults(){
+  const im=S.timp;if(!im||!im.items)return;
+  const rows=[['الاسم','اسم المستخدم','كلمة المرور','الفصول','الحالة']];
+  im.items.filter(i=>i.status==='ok').forEach(i=>rows.push([i.name,i.un,i.res==='ok'?i.pw:'',i.classNames.join('، '),i.res==='ok'?'تم':i.res==='fail'?'فشل: '+(i.err||''):'لم يُنفَّذ']));
+  saveXlsx('حسابات-المعلمين.xlsx',[{name:'المعلمون',rows}]);
 }
 async function toggleUser(uid){
   const u=S.users.find(x=>x.id===uid);if(!u)return;const to=u.active===false;
@@ -1026,6 +1153,8 @@ const ACT={
   },
   tplStu(){saveXlsx('قالب-استيراد-الطلاب.xlsx',[{name:'الطلاب',rows:[['اسم الطالب','الفصل','رقم الطالب','جوال ولي الأمر'],['(اكتب اسم الطالب هنا)','(اسم الفصل كما هو في النظام)','','']]}])},
   addClass:addClassModal,renClass(t){renClassModal(t.dataset.cid)},delClass(t){deleteClass(t.dataset.cid)},
+  importTch:importTeachersModal,tchResults:exportTchResults,
+  tplTch(){saveXlsx('قالب-استيراد-المعلمين.xlsx',[{name:'المعلمون',rows:[['الاسم','اسم المستخدم','كلمة المرور','الفصول'],['محمد أحمد','moh.ahmad','','أول / 1، أول / 2'],['سعد خالد','','','ثاني / 1']]}])},
   addUser(){userModal()},editUser(t){userModal(t.dataset.uid)},togUser(t){toggleUser(t.dataset.uid)},delUser(t){deleteUser(t.dataset.uid)},
   stMode(t){S.st.mode=t.dataset.m;render()},
   pickStu(t){S.st.sid=t.dataset.sid;const i=S.idx.get(S.st.sid);S.st.q=i?i.n:'';render()},
@@ -1046,6 +1175,16 @@ const CHG={
   selall(t){const shown=stuList().slice(0,S.stu.lim);shown.forEach(s=>t.checked?S.stu.sel.add(s.id):S.stu.sel.delete(s.id));render()},
   showpw(t){const i=document.getElementById(t.dataset.for);if(i)i.type=t.checked?'text':'password'},
   urole(t){const b=$('#u-tbox');if(b)b.style.display=t.value==='admin'?'none':''},
+  tchrebuild(){tchBuild()},
+  tchfile(t){
+    const f=t.files&&t.files[0];if(!f)return;
+    if(!window.XLSX){toast('تعذر تحميل مكتبة Excel','bad');return}
+    const rd=new FileReader();
+    rd.onload=()=>{try{const wb=XLSX.read(rd.result,{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:''});const p=parseTeacherRows(rows);
+      if(!p.rows.length){$('#ti-prev').innerHTML='<div class="note" style="margin-top:10px">لم يتم العثور على معلمين في الملف.</div>';S.timp=null;return}
+      S.timp={rows:p.rows,done:false};tchBuild()}catch(e){console.error(e);toast('تعذر قراءة الملف','bad')}};
+    rd.readAsArrayBuffer(f);
+  },
   impfile(t){
     const f=t.files&&t.files[0];if(!f)return;
     if(!window.XLSX){toast('تعذر تحميل مكتبة Excel','bad');return}
