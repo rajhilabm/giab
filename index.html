@@ -199,176 +199,66 @@ const canStats=u=>isAdmin(u)||(u.perms&&u.perms.stats);
 
 /* ================= الاتصال بقاعدة البيانات: Supabase =================
    GitHub Pages + Supabase
-   1) ضع رابط مشروع Supabase في SUPABASE_URL.
-   2) ضع anon/publishable key في SUPABASE_ANON_KEY.
-   3) نفّذ ملف supabase-schema.sql المرفق في Supabase SQL Editor.
+   - استبدال Firebase بالكامل بـ Supabase.
+   - يتم التحديث بالاستعلام الدوري بدلاً من الاشتراك اللحظي.
 */
-const SUPABASE_URL='https://qcssewwlffcbduwikkoxa.supabase.co';
+const SUPABASE_URL='https://giab.supabase.co';
 const SUPABASE_ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFjc3Nld3dsZmZjYmR1eWtrb3hhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk4Nzg0MDYsImV4cCI6MjEwNTQ1NDQwNn0.xvRszfn4NwvZaNMqkaCndkdXt8y73DUkRd-6lwvhBXs';
-
 let sb=null;
 function deepClone(x){return JSON.parse(JSON.stringify(x??{}))}
 function makeSnap(id,data){return {id,exists:data!==undefined,data:()=>deepClone(data)}}
-
-function dbErr(error){
-  const e=new Error(error?.message||'Supabase error');
-  e.code=error?.code||'supabase_error';
-  return e;
-}
-
+function dbErr(error){const e=new Error(error?.message||'Supabase error');e.code=error?.code||'supabase_error';return e}
 class SBQuery{
   constructor(name,filters=[]){this.name=name;this.filters=filters}
   where(field,op,value){return new SBQuery(this.name,this.filters.concat([[field,op,value]]))}
   async _load(){
     if(!sb)throw new Error('Supabase غير مهيأ');
-    let q=sb.from(this.name).select('id,data');
-    const {data,error}=await q;
+    const {data,error}=await sb.from(this.name).select('id,data');
     if(error)throw dbErr(error);
     let rows=(data||[]).map(r=>({id:r.id,...deepClone(r.data||{})}));
-    for(const [f,op,v] of this.filters){
-      rows=rows.filter(x=>{
-        const a=x[f];
-        if(op==='==')return a===v;
-        if(op==='>=')return a>=v;
-        if(op==='<=')return a<=v;
-        return false;
-      });
-    }
+    for(const [f,op,v] of this.filters){rows=rows.filter(x=>{const a=x[f];if(op==='==')return a===v;if(op==='>=')return a>=v;if(op==='<=')return a<=v;return false})}
     return rows.map(x=>makeSnap(x.id,x));
   }
   async get(){return {docs:await this._load()}}
-  onSnapshot(cb,err){
-    let stopped=false,last='';
-    const run=async()=>{
-      if(stopped)return;
-      try{
-        const docs=await this._load();
-        const sig=JSON.stringify(docs.map(d=>[d.id,d.data()]));
-        if(sig!==last){last=sig;cb({docs})}
-      }catch(e){if(err)err(e)}
-    };
-    run();
-    const timer=setInterval(run,5000);
-    return()=>{stopped=true;clearInterval(timer)};
-  }
 }
-
 class SBDoc{
   constructor(path){this.path=path}
   _parts(){return String(this.path).split('/').filter(Boolean)}
-  _tableId(){
-    const p=this._parts();
-    if(p.length!==2)throw new Error('مسار قاعدة البيانات غير صحيح: '+this.path);
-    return {table:p[0],id:p[1]};
-  }
-  async get(){
-    const {table,id}=this._tableId();
-    const {data,error}=await sb.from(table).select('id,data').eq('id',id).maybeSingle();
-    if(error)throw dbErr(error);
-    return makeSnap(id,data?data.data:undefined);
-  }
-  async set(data){
-    const {table,id}=this._tableId();
-    const {data:row,error}=await sb.from(table).upsert({id,data:deepClone(data)},{onConflict:'id'}).select('id,data').single();
-    if(error)throw dbErr(error);
-    return makeSnap(id,row.data);
-  }
-  async update(data){
-    const {table,id}=this._tableId();
-    const {data:old,error:e1}=await sb.from(table).select('id,data').eq('id',id).maybeSingle();
-    if(e1)throw dbErr(e1);
-    if(!old)throw Object.assign(new Error('Document not found'),{code:'not-found'});
-    const merged={...(old.data||{}),...deepClone(data)};
-    const {data:row,error}=await sb.from(table).update({data:merged}).eq('id',id).select('id,data').single();
-    if(error)throw dbErr(error);
-    return makeSnap(id,row.data);
-  }
-  async delete(){
-    const {table,id}=this._tableId();
-    const {error}=await sb.from(table).delete().eq('id',id);
-    if(error)throw dbErr(error);
-  }
-  async acquire(){
-    /* Supabase version: setup is protected by the follow-up "admin exists" check.
-       This keeps the original flow without requiring a custom backend lock. */
-    return {acquired:true};
-  }
+  _tableId(){const p=this._parts();if(p.length!==2)throw new Error('مسار قاعدة البيانات غير صحيح: '+this.path);let table=p[0],id=p[1];if(table==='meta')table='settings';return{table,id}}
+  async get(){const {table,id}=this._tableId();const {data,error}=await sb.from(table).select('id,data').eq('id',id).maybeSingle();if(error)throw dbErr(error);return makeSnap(id,data?data.data:undefined)}
+  async set(data){const {table,id}=this._tableId();const {data:row,error}=await sb.from(table).upsert({id,data:deepClone(data)},{onConflict:'id'}).select('id,data').single();if(error)throw dbErr(error);return makeSnap(id,row.data)}
+  async update(data){const {table,id}=this._tableId();const {data:old,error:e1}=await sb.from(table).select('id,data').eq('id',id).maybeSingle();if(e1)throw dbErr(e1);if(!old)throw Object.assign(new Error('Document not found'),{code:'not-found'});const merged={...(old.data||{}),...deepClone(data)};const {data:row,error}=await sb.from(table).update({data:merged}).eq('id',id).select('id,data').single();if(error)throw dbErr(error);return makeSnap(id,row.data)}
+  async delete(){const {table,id}=this._tableId();const {error}=await sb.from(table).delete().eq('id',id);if(error)throw dbErr(error)}
+  async acquire(){return{acquired:true}}
 }
-
-class SupabaseDB{
-  doc(path){return new SBDoc(path)}
-  collection(name){return new SBQuery(name)}
+class SupabaseDB{doc(path){return new SBDoc(path)}collection(name){return new SBQuery(name)}}
+const SupabaseDownloads={save:async({filename,data})=>{const a=document.createElement('a');a.href=URL.createObjectURL(data);a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500)}};
+async function loadAllData(){
+  const [settingsSnap,classesSnap,usersSnap,rostersSnap]=await Promise.all([S.db.doc('meta/settings').get(),S.db.collection('classes').get(),S.db.collection('users').get(),S.db.collection('rosters').get()]);
+  S.ready.settings=true;if(settingsSnap.exists)S.settings={...DEF,...settingsSnap.data()};
+  S.classes=classesSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>cmpAr(a.name,b.name));S.ready.classes=true;
+  S.users=usersSnap.docs.map(d=>({id:d.id,...d.data()}));S.ready.users=true;
+  const r={};rostersSnap.docs.forEach(d=>r[d.id]=d.data().list||[]);S.rosters=r;S.ready.rosters=true;reindex();afterData();
 }
-
-const SupabaseDownloads={
-  save:async({filename,data})=>{
-    const a=document.createElement('a');
-    a.href=URL.createObjectURL(data);
-    a.download=filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500);
-  }
-};
-
+async function refreshData(){try{await loadAllData();if(curUser())await subMonth(true)}catch(e){console.error(e);toast(errMsg(e),'bad')}}
 async function init(){
   render();
-  try{
-    if(!window.supabase)throw new Error('تعذر تحميل مكتبة Supabase');
-    if(SUPABASE_URL.startsWith('YOUR_')||SUPABASE_ANON_KEY.startsWith('YOUR_')){
-      throw new Error('أدخل SUPABASE_URL و SUPABASE_ANON_KEY داخل الملف أولاً');
-    }
-    sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);
-    S.db=new SupabaseDB();
-    S.dl=SupabaseDownloads;
-  }catch(e){
-    console.error(e);
-    S.fatal=true;
-    toast(e.message,'bad');
-    render();
-    return;
-  }
-  const onErr=e=>{console.error(e);toast(errMsg(e),'bad')};
-  S.db.doc('meta/settings').onSnapshot(s=>{S.ready.settings=true;if(s.exists)S.settings={...DEF,...s.data()};afterData()},onErr);
-  S.db.collection('classes').onSnapshot(s=>{S.classes=s.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>cmpAr(a.name,b.name));S.ready.classes=true;reindex();afterData()},onErr);
-  S.db.collection('users').onSnapshot(s=>{S.users=s.docs.map(d=>({id:d.id,...d.data()}));S.ready.users=true;afterData()},onErr);
-  S.db.collection('rosters').onSnapshot(s=>{const r={};s.docs.forEach(d=>r[d.id]=d.data().list||[]);S.rosters=r;S.ready.rosters=true;reindex();afterData()},onErr);
-  setInterval(()=>{if(!allReady()||!curUser())return;subMonth();if(['home','attend'].includes(S.view)&&!document.querySelector('#modal-root .ov'))render()},30000);
+  try{if(!window.supabase)throw new Error('تعذر تحميل مكتبة Supabase');if(SUPABASE_ANON_KEY.startsWith('YOUR_'))throw new Error('ضع Publishable/anon key لمشروع giab داخل SUPABASE_ANON_KEY');sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);S.db=new SupabaseDB();S.dl=SupabaseDownloads}catch(e){console.error(e);S.fatal=true;toast(e.message,'bad');render();return}
+  try{await loadAllData()}catch(e){console.error(e);S.fatal=true;toast(errMsg(e),'bad');render();return}
+  setInterval(()=>{if(!allReady()||!curUser())return;refreshData();if(['home','attend'].includes(S.view)&&!document.querySelector('#modal-root .ov'))render()},30000);
 }
-
-function subMonth(){
-  const mo=nowInfo().month;
-  if(S.subMo===mo)return;
-  if(S.unsubMo)S.unsubMo();
-  S.subMo=mo;S.monthAtt={};
-  S.unsubMo=S.db.collection('att').where('mo','==',mo).onSnapshot(snap=>{
-    const m={};
-    snap.docs.forEach(d=>{
-      const x=d.data(),days={};
-      for(const [k,v] of Object.entries(x.days||{}))days[k]=decRec(v);
-      m[x.c]=days;
-    });
-    S.monthAtt=m;render();
-  },e=>console.error(e));
-}
-
 let sessTried=false;
 function afterData(){
   if(allReady()){
     if(!sessTried){sessTried=true;try{const s=JSON.parse(localStorage.getItem('att.sess')||'null');const u=s&&S.users.find(x=>x.id===s.u&&x.hash===s.h&&x.active!==false);if(u)S.meId=u.id}catch(e){}}
     else if(S.meId){const u=S.users.find(x=>x.id===S.meId);let bad=!u||u.active===false;try{const s=JSON.parse(localStorage.getItem('att.sess')||'null');if(u&&s&&s.h!==u.hash)bad=true}catch(e){}if(bad){S.meId=null;try{localStorage.removeItem('att.sess')}catch(e){}}}
-    subMonth();
   }
   render();
 }
 function decRec(r){const m={};(r.m||[]).forEach(x=>{const i=x.lastIndexOf(':');m[x.slice(0,i)]=x.slice(i+1)});return{by:r.by,bn:r.bn,at:r.at,r:r.r||[],m}}
-function subMonth(){
-  const mo=nowInfo().month;if(S.subMo===mo)return;
-  if(S.unsubMo)S.unsubMo();S.subMo=mo;S.monthAtt={};
-  S.unsubMo=S.db.collection('att').where('mo','==',mo).onSnapshot(snap=>{
-    const m={};snap.docs.forEach(d=>{const x=d.data();const days={};for(const [k,v] of Object.entries(x.days||{}))days[k]=decRec(v);m[x.c]=days});
-    S.monthAtt=m;render();
-  },e=>console.error(e));
+async function subMonth(force=false){
+  const mo=nowInfo().month;if(!force&&S.subMo===mo&&Object.keys(S.monthAtt).length)return;S.subMo=mo;S.monthAtt={};
+  try{const snap=await S.db.collection('att').where('mo','==',mo).get();const m={};snap.docs.forEach(d=>{const x=d.data(),days={};for(const [k,v] of Object.entries(x.days||{}))days[k]=decRec(v);m[x.c]=days});S.monthAtt=m}catch(e){console.error(e)}
 }
 
 /* ================= وقت إدخال الغياب ================= */
