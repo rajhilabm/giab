@@ -4,6 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>نظام تحضير الطلاب</title>
+<meta name="description" content="نظام تحضير وغياب الطلاب للمدارس">
+<!-- أيقونة الموقع (تظهر في تبويب المتصفح) -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiMwZDZhNjIiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMyMGIyYTAiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMyIgZmlsbD0idXJsKCNnKSIvPjxwYXRoIGQ9Ik0xNTAgMjcyTDIyMiAzNDRMMzY2IDE3NiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjU4IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<!-- دعم التطبيق (PWA) -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0f766e" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1614" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="التحضير">
+<meta name="application-name" content="نظام تحضير الطلاب">
 <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#f3f7f6;--sf:#ffffff;--sf2:#f7faf9;--tx:#14211e;--mu:#5a6c67;--ln:#dbe5e2;--br:#0f766e;--brd:#0b5c56;--brs:#e0f3f0;--ok:#166534;--okb:#dcf4e4;--bad:#b42318;--badb:#fde6e3;--wn:#8f4f08;--wnb:#fdeed0;--in:#1d4f91;--inb:#e0ecfb;--sh:0 1px 2px rgba(20,40,35,.06),0 6px 18px rgba(20,40,35,.06);
@@ -19,6 +33,10 @@ h1,h2,h3{margin:0;line-height:1.3}
 header.top{background:var(--br);color:#fff}
 header.top .wrap{display:flex;align-items:center;gap:12px;padding-top:12px;padding-bottom:12px}
 .logo{width:38px;height:38px;border-radius:11px;background:rgba(255,255,255,.18);display:grid;place-items:center;font-weight:800;font-size:20px}
+.logo svg{width:24px;height:24px;display:block}
+/* شريط علوي بلون الهوية خلف شريط حالة الجوال عند تشغيل الموقع كتطبيق */
+body::before{content:'';position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:var(--br);z-index:100;pointer-events:none}
+.applogo{width:64px;height:64px;border-radius:18px;display:block;margin:0 auto 10px;box-shadow:var(--sh)}
 .brandt{flex:1;min-width:0}
 .brandt b{display:block;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .brandt small{opacity:.85;font-size:13px}
@@ -141,6 +159,56 @@ tr:last-child td{border-bottom:0}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script>
 'use strict';
+/* ================= أيقونة التطبيق ودعم PWA ================= */
+/* أيقونة الموقع بصيغة SVG مضمّنة داخل الملف (تعمل حتى لو لم تُرفع ملفات الأيقونات) */
+const ICON_URI='data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA1MTIgNTEyIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiMwZDZhNjIiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMyMGIyYTAiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgcng9IjExMyIgZmlsbD0idXJsKCNnKSIvPjxwYXRoIGQ9Ik0xNTAgMjcyTDIyMiAzNDRMMzY2IDE3NiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjU4IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz48L3N2Zz4=';
+const MARK_SVG='<svg viewBox="0 0 512 512" aria-hidden="true"><path d="M150 272L222 344L366 176" fill="none" stroke="currentColor" stroke-width="62" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+let deferredPrompt=null;
+const standalone=()=>{try{return window.matchMedia('(display-mode: standalone)').matches||window.matchMedia('(display-mode: fullscreen)').matches||window.navigator.standalone===true}catch(e){return false}};
+const canInstall=()=>!!deferredPrompt&&!standalone();
+const isIOS=()=>/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();deferredPrompt=e;if(S.phase&&S.phase!=='boot')render()});
+window.addEventListener('appinstalled',()=>{deferredPrompt=null;toast('تم تثبيت التطبيق على جهازك','ok');render()});
+/* عند غياب ملف manifest.json نبني بديلاً في الذاكرة ليبقى التثبيت ممكناً بملف واحد */
+function inlineManifest(){
+  try{
+    const base=location.href.split('?')[0].split('#')[0];
+    const m={name:'نظام تحضير الطلاب',short_name:'التحضير',id:base,start_url:base,scope:base.replace(/[^/]*$/,''),
+      display:'standalone',orientation:'any',background_color:'#f3f7f6',theme_color:'#0f766e',lang:'ar',dir:'rtl',
+      icons:[{src:ICON_URI,sizes:'any',type:'image/svg+xml',purpose:'any'},{src:ICON_URI,sizes:'any',type:'image/svg+xml',purpose:'maskable'}]};
+    const url=URL.createObjectURL(new Blob([JSON.stringify(m)],{type:'application/manifest+json'}));
+    const l=document.querySelector('link[rel=manifest]');if(l)l.href=url;
+  }catch(e){}
+}
+async function initPwa(){
+  try{const r=await fetch('manifest.json',{cache:'no-store'});if(!r.ok)throw 0;await r.json()}catch(e){inlineManifest()}
+  if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost')){
+    try{await navigator.serviceWorker.register('sw.js')}catch(e){console.warn('لم يُسجَّل ملف sw.js (اختياري):',e&&e.message)}
+  }
+}
+async function installApp(){
+  if(deferredPrompt){
+    const p=deferredPrompt;deferredPrompt=null;
+    try{p.prompt();await p.userChoice}catch(e){}
+    render();return;
+  }
+  openModal('تثبيت التطبيق على الجهاز',
+`<p style="margin-top:0">${standalone()?'التطبيق مثبَّت لديك بالفعل ويعمل الآن كتطبيق مستقل. ✅':'إن لم يظهر زر التثبيت تلقائياً، ثبّته يدوياً من المتصفح:'}</p>
+${standalone()?'':`<div class="note" style="margin-bottom:10px"><b>آيفون / آيباد (Safari):</b> زر المشاركة <b>⬆️</b> ← «إضافة إلى الشاشة الرئيسية».</div>
+<div class="note" style="margin-bottom:10px"><b>أندرويد (Chrome):</b> قائمة ⋮ ← «تثبيت التطبيق» أو «إضافة إلى الشاشة الرئيسية».</div>
+<div class="note" style="margin-bottom:10px"><b>الكمبيوتر (Chrome / Edge):</b> أيقونة التثبيت ⊕ في شريط العنوان، أو القائمة ← «تثبيت».</div>
+<p class="muted small" style="margin:0">ملاحظة: التثبيت يحتاج أن يكون الموقع مفتوحاً عبر رابط https، وأن تكون ملفات <span dir="ltr">manifest.json</span> و<span dir="ltr">sw.js</span> والأيقونات مرفوعة بجانب الصفحة.</p>`}`,
+  [{t:'حسناً',close:true}],{nofocus:true});
+}
+/* تحديث النسخة: يمسح المخزن المؤقت ويعيد التحميل */
+async function refreshApp(){
+  try{
+    if('serviceWorker' in navigator){const rs=await navigator.serviceWorker.getRegistrations();await Promise.all(rs.map(r=>r.unregister()))}
+    if(window.caches){const ks=await caches.keys();await Promise.all(ks.map(k=>caches.delete(k)))}
+  }catch(e){}
+  location.reload();
+}
+
 /* ================= الثوابت والأدوات ================= */
 const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false};
 const EMAIL_DOMAIN='att.local';   /* نطاق داخلي وهمي لتحويل اسم المستخدم إلى بريد لـ Supabase Auth؛ لا تُرسل عليه رسائل. إن رفضه Supabase غيّره لنطاق حقيقي */
@@ -430,12 +498,13 @@ function shell(){
   return appHTML(me);
 }
 const schoolName=()=>S.settings.schoolName||S.school||'نظام تحضير الطلاب';
-function loginHTML(){return`<div class="auth"><div class="card"><div style="text-align:center;margin-bottom:14px"><div class="logo" style="margin:0 auto 10px;background:var(--brs);color:var(--brd)">✓</div><h1>${esc(schoolName())}</h1><p class="muted" style="margin:4px 0 0">تسجيل الدخول للتحضير</p></div>
+function loginHTML(){return`<div class="auth"><div class="card"><div style="text-align:center;margin-bottom:14px"><img class="applogo" src="${ICON_URI}" alt="" width="64" height="64"><h1>${esc(schoolName())}</h1><p class="muted" style="margin:4px 0 0">تسجيل الدخول للتحضير</p></div>
 <label class="f"><span>اسم المستخدم</span><input type="text" id="lu" dir="ltr" autocomplete="username" autocapitalize="off" data-enter="login"></label>
 <div id="lp-box" ${noPwFlag()?'style="display:none"':''}><label class="f"><span>كلمة المرور</span><input type="password" id="lp" autocomplete="current-password" data-enter="login"></label></div>
 ${noPwFlag()?`<p class="muted small" style="margin:-4px 0 12px">الدخول للمعلمين باسم المستخدم فقط. <button class="btn sm ghost" data-act="showPw" style="color:var(--br)">دخول بكلمة المرور (للوكيل)</button></p>`:''}
-<button class="btn primary" style="width:100%" data-act="login">دخول</button></div></div>`}
-function setupHTML(){return`<div class="auth"><div class="card"><h1>إعداد النظام لأول مرة</h1><p class="muted">سيتم إنشاء حساب الوكيل (المدير). بعدها تضيف الفصول والطلاب والمعلمين من لوحة التحكم.</p>
+<button class="btn primary" style="width:100%" data-act="login">دخول</button>
+${canInstall()?'<button class="btn" style="width:100%;margin-top:10px" data-act="install">📲 تثبيت التطبيق على الجهاز</button>':''}</div></div>`}
+function setupHTML(){return`<div class="auth"><div class="card"><img class="applogo" src="${ICON_URI}" alt="" width="64" height="64"><h1 style="text-align:center">إعداد النظام لأول مرة</h1><p class="muted">سيتم إنشاء حساب الوكيل (المدير). بعدها تضيف الفصول والطلاب والمعلمين من لوحة التحكم.</p>
 <label class="f"><span>اسم المدرسة</span><input type="text" id="su-school"></label>
 <label class="f"><span>اسم الوكيل</span><input type="text" id="su-name"></label>
 <label class="f"><span>اسم المستخدم (بالإنجليزية)</span><input type="text" id="su-un" dir="ltr" autocapitalize="off"></label>
@@ -459,8 +528,8 @@ function appHTML(me){
     case 'stats':body=canStats(me)?statsHTML(me):'';break;
     case 'settings':body=admin?settingsHTML():'';break;
   }
-  return`<header class="top"><div class="wrap"><div class="logo">✓</div><div class="brandt"><b>${esc(schoolName())}</b><small>${admin?'لوحة الوكيل':'بوابة المعلم'}</small></div>
-<div class="uchip"><span class="un">${esc(me.name)}</span><button class="btn sm" data-act="logout">خروج</button></div></div></header>
+  return`<header class="top"><div class="wrap"><div class="logo">${MARK_SVG}</div><div class="brandt"><b>${esc(schoolName())}</b><small>${admin?'لوحة الوكيل':'بوابة المعلم'}</small></div>
+<div class="uchip">${canInstall()?'<button class="btn sm" data-act="install" title="تثبيت التطبيق على الجهاز">تثبيت</button>':''}<span class="un">${esc(me.name)}</span><button class="btn sm" data-act="logout">خروج</button></div></div></header>
 <nav class="tabs"><div class="wrap">${tabs.map(t=>`<button class="${cur===t[0]?'on':''}" data-act="nav" data-v="${t[0]}">${t[1]}</button>`).join('')}</div></nav>
 <main><div class="wrap">${body}</div></main>`;
 }
@@ -1356,6 +1425,9 @@ function settingsHTML(){
 <div class="optbar" style="margin-bottom:8px"><label class="ck"><input type="checkbox" data-chg="sdsync" ${d.syncPw?'checked':''}> حفظ كلمات المرور في قاعدة البيانات لمزامنتها بين أجهزتك</label></div>
 <p class="muted small" style="margin:0 0 14px">افتراضياً تُحفظ كلمات المرور في هذا الجهاز فقط. فعّل المزامنة إن كنت تطبع البطاقات من جهاز آخر، مع العلم أنها ستُخزَّن نصاً في قاعدة البيانات.</p>
 <div class="bar" style="margin-bottom:0"><button class="btn" data-act="printAllCards">🖨️ طباعة جميع البطاقات</button><span class="sp"></span><button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div></div>
+<div class="card"><h3>التطبيق على الأجهزة</h3>
+<p class="muted small" style="margin:0 0 10px">يمكن تثبيت الموقع كتطبيق على جوال المعلم أو الكمبيوتر فيفتح بأيقونته الخاصة وبدون شريط المتصفح، ويعمل حتى مع ضعف الاتصال.</p>
+<div class="bar" style="margin-bottom:0"><button class="btn primary" data-act="install">${standalone()?'التطبيق مثبَّت ✅':'تثبيت التطبيق'}</button><button class="btn" data-act="refreshApp">تحديث النسخة</button></div></div>
 <div class="card"><h3>حسابي</h3><button class="btn" data-act="myPw">تغيير كلمة المرور</button></div>`;
 }
 async function saveSettings(){
@@ -1472,6 +1544,7 @@ const ACT={
   addUser(){userModal()},editUser(t){userModal(t.dataset.uid)},togUser(t){toggleUser(t.dataset.uid)},delUser(t){deleteUser(t.dataset.uid)},
   waUser(t){waUser(t.dataset.uid)},cardUser(t){cardUser(t.dataset.uid)},printAllCards(){printAllCards()},
   showPw(){const b=$('#lp-box');if(b)b.style.display='';setNoPwFlag(false);const f=$('#lp');if(f)f.focus()},
+  install(){installApp()},refreshApp(){refreshApp()},
   stMode(t){S.st.mode=t.dataset.m;render()},
   pickStu(t){S.st.sid=t.dataset.sid;const i=S.idx.get(S.st.sid);S.st.q=i?i.n:'';render()},
   stExport:exportStats,
@@ -1527,5 +1600,6 @@ document.addEventListener('input',e=>{const t=e.target.closest('[data-inp]');if(
 document.addEventListener('change',e=>{const t=e.target.closest('[data-chg]');if(t&&CHG[t.dataset.chg]){const r=CHG[t.dataset.chg](t,e);if(r&&r.catch)r.catch(err=>toast(errMsg(err),'bad'))}});
 document.addEventListener('keydown',e=>{if(e.key==='Enter'){const t=e.target.closest('[data-enter]');if(t&&ACT[t.dataset.enter])ACT[t.dataset.enter]()}});
 init();
+initPwa();
 </script>
 </body></html>
