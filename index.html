@@ -139,6 +139,9 @@ tr:last-child td{border-bottom:0}
 'use strict';
 /* ================= الثوابت والأدوات ================= */
 const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0};
+const EMAIL_DOMAIN='att.local';   /* نطاق داخلي وهمي لتحويل اسم المستخدم إلى بريد لـ Supabase Auth؛ لا تُرسل عليه رسائل. إن رفضه Supabase غيّره لنطاق حقيقي */
+const toEmail=un=>un+'@'+EMAIL_DOMAIN;
+const UN_RE=/^[a-z0-9._-]{3,30}$/;
 const CODES={p:{t:'حاضر',c:'ok'},a:{t:'غائب',c:'bad'},l:{t:'متأخر',c:'wn'},e:{t:'بعذر',c:'in'}};
 const DAYN=['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'];
 const PERMS=[['mark','تحضير الطلاب'],['editSaved','تعديل تحضير تم حفظه'],['pastDates','التحضير/التعديل لتواريخ سابقة'],['bypassTime','تجاوز وقت الإدخال المحدد'],['stats','عرض الإحصائيات'],['allClasses','الوصول لجميع الفصول']];
@@ -158,9 +161,9 @@ const chk=id=>{const e=document.getElementById(id);return !!(e&&e.checked)};
 function addDays(k,n){const d=new Date(k+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10)}
 function nowInfo(){
   const tz=S.settings.tz||'Asia/Riyadh';let p={};
-  try{new Intl.DateTimeFormat('en-US',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',weekday:'short'}).formatToParts(new Date()).forEach(x=>p[x.type]=x.value)}catch(e){const d=new Date();p={year:d.getFullYear(),month:String(d.getMonth()+1).padStart(2,'0'),day:String(d.getDate()).padStart(2,'0'),hour:d.getHours(),minute:d.getMinutes(),weekday:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}}
+  try{new Intl.DateTimeFormat('en-US',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23',weekday:'short'}).formatToParts(new Date(nowMs())).forEach(x=>p[x.type]=x.value)}catch(e){const d=new Date(nowMs());p={year:d.getFullYear(),month:String(d.getMonth()+1).padStart(2,'0'),day:String(d.getDate()).padStart(2,'0'),hour:d.getHours(),minute:d.getMinutes(),weekday:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][d.getDay()]}}
   const date=`${p.year}-${p.month}-${p.day}`;
-  return {date,month:date.slice(0,7),min:(+p.hour%24)*60+ +p.minute,dow:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(p.weekday),ts:Date.now()};
+  return {date,month:date.slice(0,7),min:(+p.hour%24)*60+ +p.minute,dow:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].indexOf(p.weekday),ts:nowMs()};
 }
 const fmtDay=(k,o)=>{try{return new Date(k+'T12:00:00Z').toLocaleDateString('ar-SA-u-ca-gregory-nu-latn',{timeZone:'UTC',...o})}catch(e){return k}};
 const hijri=k=>{try{return new Date(k+'T12:00:00Z').toLocaleDateString('ar-SA-u-ca-islamic-umalqura-nu-latn',{timeZone:'UTC',day:'numeric',month:'long',year:'numeric'})}catch(e){return ''}};
@@ -168,28 +171,31 @@ const fmtClock=ts=>{try{return new Date(ts).toLocaleTimeString('ar-SA-u-nu-latn'
 const longDate=k=>fmtDay(k,{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 
 function toast(msg,type){const el=document.createElement('div');el.className='tst '+(type||'');el.textContent=msg;$('#toast').appendChild(el);setTimeout(()=>el.remove(),3800)}
-function errMsg(e){const c=e&&e.code;const m={quota_exceeded:'تم الوصول للحد الأقصى من السجلات المسموحة',invalid_argument:'تعذر الحفظ: لا تملك صلاحية الكتابة أو البيانات غير صحيحة',resource_exhausted:'عمليات كثيرة في وقت قصير، حاول بعد لحظات',unavailable:'الخدمة غير متاحة مؤقتاً، حاول مرة أخرى',revoked:'انتهت صلاحية الوصول لهذه الصفحة، أعد فتح الرابط'};return m[c]||('حدث خطأ: '+(e&&e.message||e))}
-
-async function pbkdf2(pw,salt){
-  try{
-    if(window.crypto&&crypto.subtle){
-      const enc=new TextEncoder();const key=await crypto.subtle.importKey('raw',enc.encode(pw),'PBKDF2',false,['deriveBits']);
-      const bits=await crypto.subtle.deriveBits({name:'PBKDF2',salt:enc.encode(salt),iterations:100000,hash:'SHA-256'},key,256);
-      return Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');
-    }
-  }catch(e){}
-  let h1=0xdeadbeef,h2=0x41c6ce57;const s=salt+':'+pw;
-  for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);h1=Math.imul(h1^c,2654435761);h2=Math.imul(h2^c,1597334677)}
-  h1=Math.imul(h1^(h1>>>16),2246822507)^Math.imul(h2^(h2>>>13),3266489909);
-  h2=Math.imul(h2^(h2>>>16),2246822507)^Math.imul(h1^(h1>>>13),3266489909);
-  return 'f'+(4294967296*(2097151&h2)+(h1>>>0)).toString(16);
+function errMsg(e){
+  const c=e&&e.code,m=String((e&&e.message)||e||'');
+  if(c==='P0001')return m;
+  if(c==='42501')return 'لا تملك صلاحية تنفيذ هذا الإجراء';
+  if(c==='23505')return 'القيمة موجودة مسبقاً';
+  if(c==='conflict')return 'تم تعديل هذه البيانات من جهاز آخر في نفس اللحظة، أعد المحاولة';
+  if(c==='PGRST301'||/JWT|token.*expired/i.test(m))return 'انتهت الجلسة، سجّل الدخول مرة أخرى';
+  if(/Failed to fetch|NetworkError|Load failed/i.test(m))return 'تعذر الاتصال بالإنترنت';
+  return 'حدث خطأ: '+m;
+}
+function authMsg(e){
+  const m=String((e&&e.message)||'');
+  if(/email.*invalid|invalid.*email/i.test(m))return 'رفض Supabase صيغة البريد الداخلي. غيّر EMAIL_DOMAIN في أعلى الملف إلى نطاق حقيقي ثم أعد المحاولة';
+  if(/password/i.test(m)&&/(short|least|weak|characters)/i.test(m))return 'كلمة المرور لا تحقق سياسة Supabase (قصيرة أو ضعيفة)';
+  if(/rate limit|too many/i.test(m))return 'محاولات كثيرة، انتظر قليلاً ثم أعد المحاولة';
+  return errMsg(e);
 }
 
 /* ================= الحالة ================= */
-const S={db:null,dl:null,fatal:false,ready:{settings:false,classes:false,users:false,rosters:false},
-  settings:{...DEF},classes:[],users:[],rosters:{},idx:new Map(),monthAtt:{},subMo:null,unsubMo:null,
+const S={db:null,dl:null,fatal:false,fatalMsg:'',phase:'boot',needsSetup:false,school:'',off:0,busy:false,
+  settings:{...DEF},classes:[],users:[],rosters:{},idx:new Map(),monthAtt:{},subMo:null,dataSig:null,monthSig:null,gsig:null,
   meId:null,view:'home',att:null,stu:{cid:'all',q:'',sel:new Set(),lim:100},st:null,sd:null,imp:null};
-const allReady=()=>Object.values(S.ready).every(Boolean);
+/* ساعة الخادم: نستخدم فرق التوقيت بين الخادم وجهاز المستخدم لتفادي التلاعب بساعة الجهاز */
+const nowMs=()=>Date.now()+S.off;
+const syncClock=ms=>{if(typeof ms==='number'&&isFinite(ms))S.off=ms-Date.now()};
 const curUser=()=>{const u=S.users.find(x=>x.id===S.meId);return u&&u.active!==false?u:null};
 const isAdmin=u=>u&&u.role==='admin';
 const cname=id=>(S.classes.find(c=>c.id===id)||{}).name||'فصل محذوف';
@@ -197,27 +203,43 @@ function reindex(){const cn=new Map(S.classes.map(c=>[c.id,c.name]));S.idx=new M
 function myClasses(u){if(!u)return[];if(isAdmin(u)||(u.perms&&u.perms.allClasses))return S.classes;return S.classes.filter(c=>(u.classIds||[]).includes(c.id))}
 const canStats=u=>isAdmin(u)||(u.perms&&u.perms.stats);
 
-/* ================= الاتصال بقاعدة البيانات: Supabase =================
-   GitHub Pages + Supabase
-   - استبدال Firebase بالكامل بـ Supabase.
-   - يتم التحديث بالاستعلام الدوري بدلاً من الاشتراك اللحظي.
+/* ================= الاتصال بقاعدة البيانات: Supabase (مصادقة + RLS) =================
+   - تسجيل الدخول عبر Supabase Auth (اسم المستخدم يتحول داخلياً إلى بريد وهمي).
+   - الصلاحيات (RLS) وفحص وقت التحضير تُنفَّذ على الخادم في قاعدة البيانات نفسها.
+   - التحديث: اشتراك لحظي (Realtime) + استعلام احتياطي كل 45 ثانية عند ظهور الصفحة.
 */
 const SUPABASE_URL='https://qcssewwlffcbduykkoxa.supabase.co';
 const SUPABASE_ANON_KEY='sb_publishable_k0lBQRvEL555K0IJfSPTZA_sDw8HncY';
 let sb=null;
 function deepClone(x){return JSON.parse(JSON.stringify(x??{}))}
+function deepMerge(a,b){for(const k of Object.keys(b)){const x=a[k],y=b[k];if(y&&typeof y==='object'&&!Array.isArray(y)&&x&&typeof x==='object'&&!Array.isArray(x))deepMerge(x,y);else a[k]=y}return a}
 function makeSnap(id,data){return {id,exists:data!==undefined,data:()=>deepClone(data)}}
-function dbErr(error){const e=new Error(error?.message||'Supabase error');e.code=error?.code||'supabase_error';return e}
+function dbErr(error){const e=new Error(error?.message||'Supabase error');e.code=error?.code||'supabase_error';e.status=error?.status;return e}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+/* استعلام: الفلترة تتم على الخادم (data->>الحقل) مع تقسيم النتائج على صفحات */
 class SBQuery{
   constructor(name,filters=[]){this.name=name;this.filters=filters}
   where(field,op,value){return new SBQuery(this.name,this.filters.concat([[field,op,value]]))}
+  _build(){
+    let q=sb.from(this.name).select('id,data');
+    for(const [f,op,v] of this.filters){
+      const col='data->>'+f;
+      if(op==='==')q=q.eq(col,v);else if(op==='>=')q=q.gte(col,v);else if(op==='<=')q=q.lte(col,v);
+      else throw new Error('عامل غير مدعوم: '+op);
+    }
+    return q.order('id');
+  }
   async _load(){
     if(!sb)throw new Error('Supabase غير مهيأ');
-    const {data,error}=await sb.from(this.name).select('id,data');
-    if(error)throw dbErr(error);
-    let rows=(data||[]).map(r=>({id:r.id,...deepClone(r.data||{})}));
-    for(const [f,op,v] of this.filters){rows=rows.filter(x=>{const a=x[f];if(op==='==')return a===v;if(op==='>=')return a>=v;if(op==='<=')return a<=v;return false})}
-    return rows.map(x=>makeSnap(x.id,x));
+    const rows=[];
+    for(let from=0;;from+=1000){
+      const {data,error}=await this._build().range(from,from+999);
+      if(error)throw dbErr(error);
+      rows.push(...(data||[]));
+      if(!data||data.length<1000)break;
+    }
+    return rows.map(r=>{const x={id:r.id,...deepClone(r.data||{})};return makeSnap(x.id,x)});
   }
   async get(){return {docs:await this._load()}}
 }
@@ -226,39 +248,137 @@ class SBDoc{
   _parts(){return String(this.path).split('/').filter(Boolean)}
   _tableId(){const p=this._parts();if(p.length!==2)throw new Error('مسار قاعدة البيانات غير صحيح: '+this.path);let table=p[0],id=p[1];if(table==='meta')table='settings';return{table,id}}
   async get(){const {table,id}=this._tableId();const {data,error}=await sb.from(table).select('id,data').eq('id',id).maybeSingle();if(error)throw dbErr(error);return makeSnap(id,data?data.data:undefined)}
-  async set(data){const {table,id}=this._tableId();const {data:row,error}=await sb.from(table).upsert({id,data:deepClone(data)},{onConflict:'id'}).select('id,data').single();if(error)throw dbErr(error);return makeSnap(id,row.data)}
-  async update(data){const {table,id}=this._tableId();const {data:old,error:e1}=await sb.from(table).select('id,data').eq('id',id).maybeSingle();if(e1)throw dbErr(e1);if(!old)throw Object.assign(new Error('Document not found'),{code:'not-found'});const merged={...(old.data||{}),...deepClone(data)};const {data:row,error}=await sb.from(table).update({data:merged}).eq('id',id).select('id,data').single();if(error)throw dbErr(error);return makeSnap(id,row.data)}
-  async delete(){const {table,id}=this._tableId();const {error}=await sb.from(table).delete().eq('id',id);if(error)throw dbErr(error)}
-  async acquire(){return{acquired:true}}
+  async set(data){
+    const {table,id}=this._tableId();
+    const {error}=await sb.from(table).upsert({id,data:deepClone(data)},{onConflict:'id'});
+    if(error)throw dbErr(error);scheduleRefresh(80);
+  }
+  /* قراءة-تعديل-كتابة مع قفل تفاؤلي (updated_at): لا يضيع تعديل جهاز آخر */
+  async mutate(fn){
+    const {table,id}=this._tableId();
+    for(let i=0;i<6;i++){
+      const {data:old,error:e1}=await sb.from(table).select('id,data,updated_at').eq('id',id).maybeSingle();
+      if(e1)throw dbErr(e1);
+      const next=fn(old?deepClone(old.data):undefined);
+      if(!old){
+        const {error}=await sb.from(table).insert({id,data:deepClone(next)});
+        if(!error){scheduleRefresh(80);return}
+        if(error.code!=='23505')throw dbErr(error);
+      }else{
+        const {data:rows,error}=await sb.from(table).update({data:deepClone(next)}).eq('id',id).eq('updated_at',old.updated_at).select('id');
+        if(error)throw dbErr(error);
+        if(rows&&rows.length){scheduleRefresh(80);return}
+      }
+      await sleep(90*(i+1));
+    }
+    throw Object.assign(new Error('تعذر الحفظ بسبب تعديل متزامن'),{code:'conflict'});
+  }
+  async update(data){return this.mutate(cur=>{if(cur===undefined)throw Object.assign(new Error('Document not found'),{code:'not-found'});return deepMerge(cur,deepClone(data))})}
+  async delete(){const {table,id}=this._tableId();const {error}=await sb.from(table).delete().eq('id',id);if(error)throw dbErr(error);scheduleRefresh(80)}
 }
 class SupabaseDB{doc(path){return new SBDoc(path)}collection(name){return new SBQuery(name)}}
 const SupabaseDownloads={save:async({filename,data})=>{const a=document.createElement('a');a.href=URL.createObjectURL(data);a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},500)}};
+const mutRoster=(cid,fn)=>S.db.doc('rosters/'+cid).mutate(cur=>({list:fn(clone((cur&&cur.list)||[]))}));
+
+/* ---------- المستخدمون (جدول profiles مرتبط بـ Supabase Auth) ---------- */
+const profFrom=r=>({id:r.id,name:r.name,username:r.username,role:r.role,active:r.active,classIds:r.class_ids||[],perms:r.perms||{},created:r.created_at?Date.parse(r.created_at):0});
+async function loadProfiles(){const {data,error}=await sb.from('profiles').select('*');if(error)throw dbErr(error);return (data||[]).map(profFrom)}
+
+/* ---------- تحميل البيانات ---------- */
 async function loadAllData(){
-  const [settingsSnap,classesSnap,usersSnap,rostersSnap]=await Promise.all([S.db.doc('meta/settings').get(),S.db.collection('classes').get(),S.db.collection('users').get(),S.db.collection('rosters').get()]);
-  S.ready.settings=true;if(settingsSnap.exists)S.settings={...DEF,...settingsSnap.data()};
-  S.classes=classesSnap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>cmpAr(a.name,b.name));S.ready.classes=true;
-  S.users=usersSnap.docs.map(d=>({id:d.id,...d.data()}));S.ready.users=true;
-  const r={};rostersSnap.docs.forEach(d=>r[d.id]=d.data().list||[]);S.rosters=r;S.ready.rosters=true;reindex();afterData();
-}
-async function refreshData(){try{await loadAllData();if(curUser())await subMonth(true)}catch(e){console.error(e);toast(errMsg(e),'bad')}}
-async function init(){
-  render();
-  try{if(!window.supabase)throw new Error('تعذر تحميل مكتبة Supabase');if(SUPABASE_ANON_KEY.startsWith('YOUR_'))throw new Error('ضع Publishable/anon key لمشروع giab داخل SUPABASE_ANON_KEY');sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY);S.db=new SupabaseDB();S.dl=SupabaseDownloads}catch(e){console.error(e);S.fatal=true;toast(e.message,'bad');render();return}
-  try{await loadAllData()}catch(e){console.error(e);S.fatal=true;toast(errMsg(e),'bad');render();return}
-  setInterval(()=>{if(!allReady()||!curUser())return;refreshData();if(['home','attend'].includes(S.view)&&!document.querySelector('#modal-root .ov'))render()},30000);
-}
-let sessTried=false;
-function afterData(){
-  if(allReady()){
-    if(!sessTried){sessTried=true;try{const s=JSON.parse(localStorage.getItem('att.sess')||'null');const u=s&&S.users.find(x=>x.id===s.u&&x.hash===s.h&&x.active!==false);if(u)S.meId=u.id}catch(e){}}
-    else if(S.meId){const u=S.users.find(x=>x.id===S.meId);let bad=!u||u.active===false;try{const s=JSON.parse(localStorage.getItem('att.sess')||'null');if(u&&s&&s.h!==u.hash)bad=true}catch(e){}if(bad){S.meId=null;try{localStorage.removeItem('att.sess')}catch(e){}}}
-  }
-  render();
+  const pr=await loadProfiles();
+  const me=pr.find(u=>u.id===S.meId);
+  if(!me||me.active===false)return null;                     // الحساب أُوقف أو حُذف
+  const [st,cl,ro,ss]=await Promise.all([S.db.doc('meta/settings').get(),S.db.collection('classes').get(),S.db.collection('rosters').get(),sb.rpc('app_status')]);
+  if(ss&&ss.data)syncClock(ss.data.now_ms);
+  const settings=st.exists?{...DEF,...st.data()}:{...DEF};
+  const classes=cl.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>cmpAr(a.name,b.name));
+  const rosters={};ro.docs.forEach(d=>rosters[d.id]=d.data().list||[]);
+  const sig=JSON.stringify([settings,classes,rosters,pr]);
+  const changed=sig!==S.dataSig;
+  if(changed){S.dataSig=sig;S.settings=settings;S.classes=classes;S.rosters=rosters;S.users=pr;reindex()}
+  return changed;
 }
 function decRec(r){const m={};(r.m||[]).forEach(x=>{const i=x.lastIndexOf(':');m[x.slice(0,i)]=x.slice(i+1)});return{by:r.by,bn:r.bn,at:r.at,r:r.r||[],m}}
 async function subMonth(force=false){
-  const mo=nowInfo().month;if(!force&&S.subMo===mo&&Object.keys(S.monthAtt).length)return;S.subMo=mo;S.monthAtt={};
-  try{const snap=await S.db.collection('att').where('mo','==',mo).get();const m={};snap.docs.forEach(d=>{const x=d.data(),days={};for(const [k,v] of Object.entries(x.days||{}))days[k]=decRec(v);m[x.c]=days});S.monthAtt=m}catch(e){console.error(e)}
+  const mo=nowInfo().month;if(!force&&S.subMo===mo&&Object.keys(S.monthAtt).length)return false;S.subMo=mo;
+  try{
+    const snap=await S.db.collection('att').where('mo','==',mo).get();const m={};
+    snap.docs.forEach(d=>{const x=d.data(),days={};for(const [k,v] of Object.entries(x.days||{}))days[k]=decRec(v);m[x.c]=days});
+    const sig=JSON.stringify(m),changed=sig!==S.monthSig;S.monthSig=sig;S.monthAtt=m;return changed;
+  }catch(e){console.error(e);return false}
+}
+
+/* ---------- التحديث: لحظي + احتياطي ---------- */
+let refreshing=false,again=false,refT=0,chan=null,pollT=null;
+function scheduleRefresh(ms){clearTimeout(refT);refT=setTimeout(refreshData,ms||100)}
+async function refreshData(){
+  if(!S.meId||S.phase!=='app')return;
+  if(refreshing){again=true;return}
+  refreshing=true;
+  try{
+    const c1=await loadAllData();
+    if(c1===null){toast('تم إيقاف حسابك أو حذفه من قبل الوكيل','bad');try{await sb.auth.signOut()}catch(e){}resetSession();return}
+    const c2=await subMonth(true);
+    afterData(c1||c2);
+  }catch(e){
+    console.error(e);
+    if(e&&(e.status===401||e.code==='PGRST301')){try{await sb.auth.signOut()}catch(x){}resetSession();toast('انتهت الجلسة، سجّل الدخول مرة أخرى','bad')}
+  }finally{refreshing=false;if(again){again=false;scheduleRefresh(150)}}
+}
+function afterData(changed){
+  if(S.phase!=='app'||!curUser())return;
+  const g=JSON.stringify([timeGate(),nowInfo().date]);
+  if(changed||g!==S.gsig){S.gsig=g;render()}
+}
+function startLive(){
+  stopLive();
+  try{chan=sb.channel('att-live').on('postgres_changes',{event:'*',schema:'public'},()=>scheduleRefresh(500)).subscribe()}catch(e){console.error(e)}
+  pollT=setInterval(()=>{if(document.visibilityState==='visible')refreshData()},45000);
+}
+function stopLive(){if(chan){try{sb.removeChannel(chan)}catch(e){}chan=null}clearInterval(pollT);pollT=null}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&S.meId)scheduleRefresh(200)});
+
+/* ---------- الجلسة ---------- */
+function resetSession(){
+  stopLive();clearTimeout(refT);
+  Object.assign(S,{meId:null,users:[],classes:[],rosters:{},monthAtt:{},subMo:null,dataSig:null,monthSig:null,gsig:null,settings:{...DEF},
+    view:'home',att:null,st:null,sd:null,imp:null,stu:{cid:'all',q:'',sel:new Set(),lim:100},phase:'auth'});
+  reindex();closeModal();render();
+}
+async function startSession(uid){
+  const {data,error}=await sb.from('profiles').select('*').eq('id',uid).maybeSingle();
+  if(error)throw dbErr(error);
+  if(!data||data.active===false)return false;
+  S.meId=uid;S.users=[profFrom(data)];S.phase='loading';render();
+  try{
+    const c=await loadAllData();
+    if(c===null)throw new Error('الحساب غير مفعّل');
+    await subMonth(true);
+  }catch(e){S.meId=null;S.users=[];S.phase='auth';throw e}
+  S.view='home';S.att=null;S.st=null;S.sd=null;S.gsig=null;S.phase='app';render();startLive();
+  return true;
+}
+async function init(){
+  S.phase='boot';render();
+  try{
+    if(!window.supabase)throw new Error('تعذر تحميل مكتبة Supabase');
+    sb=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{persistSession:true,autoRefreshToken:true,storageKey:'att-auth'}});
+    S.db=new SupabaseDB();S.dl=SupabaseDownloads;
+  }catch(e){console.error(e);S.fatal=true;S.fatalMsg=e.message;render();return}
+  try{
+    const st=await sb.rpc('app_status');
+    if(st.error)throw dbErr(st.error);
+    S.needsSetup=!!st.data.needs_setup;S.school=st.data.school||'';syncClock(st.data.now_ms);
+    const {data:{session}}=await sb.auth.getSession();
+    if(session){
+      let ok=false;try{ok=await startSession(session.user.id)}catch(e){console.error(e)}
+      if(!ok){try{await sb.auth.signOut()}catch(e){}}
+    }
+  }catch(e){console.error(e);S.fatal=true;S.fatalMsg=errMsg(e);render();return}
+  if(!S.meId){S.phase='auth';render()}
+  sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'&&S.meId)setTimeout(resetSession,0)});
+  setInterval(()=>{if(S.phase==='app')afterData(false)},20000);
 }
 
 /* ================= وقت إدخال الغياب ================= */
@@ -286,9 +406,8 @@ function entryStatus(u,date,hasRec){
 }
 
 /* ================= المصادقة ================= */
-function saveSess(u){try{localStorage.setItem('att.sess',JSON.stringify({u:u.id,h:u.hash}))}catch(e){}}
 /* ================= العرض العام ================= */
-const KEEP=['lu','lp','su-school','su-name','su-un','su-pw'];
+const KEEP=['lu','lp','su-school','su-name','su-un','su-pw','su-code'];
 function render(){
   const keep={};KEEP.forEach(id=>{const e=document.getElementById(id);if(e)keep[id]=e.value});
   const y=window.scrollY,ae=document.activeElement;const fid=ae&&ae.id&&$('#app').contains(ae)?ae.id:null;const ss=ae&&ae.selectionStart,se=ae&&ae.selectionEnd;
@@ -298,23 +417,25 @@ function render(){
   window.scrollTo(0,y);
 }
 function shell(){
-  if(S.fatal)return`<div class="center"><h2>تعذّر تشغيل النظام</h2><p class="muted">هذه النسخة تعمل مباشرة على GitHub Pages وتحفظ البيانات محلياً في هذا المتصفح.</p></div>`;
-  if(!allReady())return`<div class="center"><div class="spin"></div><p class="muted">جاري تحميل البيانات…</p></div>`;
-  if(!S.users.some(u=>u.role==='admin'))return setupHTML();
-  const me=curUser();if(!me)return loginHTML();
+  if(S.fatal)return`<div class="center"><h2>تعذّر تشغيل النظام</h2><p class="muted">${esc(S.fatalMsg||'حدث خطأ غير متوقع')}</p><p class="muted small">تأكد أنك شغّلت ملف supabase-schema.sql في مشروع Supabase، ثم أعد تحميل الصفحة.</p></div>`;
+  if(S.phase==='boot'||S.phase==='loading')return`<div class="center"><div class="spin"></div><p class="muted">جاري تحميل البيانات…</p></div>`;
+  const me=S.phase==='app'?curUser():null;
+  if(!me)return S.needsSetup?setupHTML():loginHTML();
   return appHTML(me);
 }
-const schoolName=()=>S.settings.schoolName||'نظام تحضير الطلاب';
+const schoolName=()=>S.settings.schoolName||S.school||'نظام تحضير الطلاب';
 function loginHTML(){return`<div class="auth"><div class="card"><div style="text-align:center;margin-bottom:14px"><div class="logo" style="margin:0 auto 10px;background:var(--brs);color:var(--brd)">✓</div><h1>${esc(schoolName())}</h1><p class="muted" style="margin:4px 0 0">تسجيل الدخول للتحضير</p></div>
-<label class="f"><span>اسم المستخدم</span><input type="text" id="lu" autocomplete="username" autocapitalize="off" data-enter="login"></label>
+<label class="f"><span>اسم المستخدم</span><input type="text" id="lu" dir="ltr" autocomplete="username" autocapitalize="off" data-enter="login"></label>
 <label class="f"><span>كلمة المرور</span><input type="password" id="lp" autocomplete="current-password" data-enter="login"></label>
 <button class="btn primary" style="width:100%" data-act="login">دخول</button></div></div>`}
 function setupHTML(){return`<div class="auth"><div class="card"><h1>إعداد النظام لأول مرة</h1><p class="muted">سيتم إنشاء حساب الوكيل (المدير). بعدها تضيف الفصول والطلاب والمعلمين من لوحة التحكم.</p>
 <label class="f"><span>اسم المدرسة</span><input type="text" id="su-school"></label>
 <label class="f"><span>اسم الوكيل</span><input type="text" id="su-name"></label>
-<label class="f"><span>اسم المستخدم (بالإنجليزية)</span><input type="text" id="su-un" autocapitalize="off"></label>
-<label class="f"><span>كلمة المرور (6 أحرف على الأقل)</span><input type="password" id="su-pw" data-enter="setup"></label>
+<label class="f"><span>اسم المستخدم (بالإنجليزية)</span><input type="text" id="su-un" dir="ltr" autocapitalize="off"></label>
+<label class="f"><span>كلمة المرور (6 أحرف على الأقل)</span><input type="password" id="su-pw" autocomplete="new-password"></label>
+<label class="f"><span>رمز الإعداد (الذي وضعته في ملف SQL)</span><input type="password" id="su-code" dir="ltr" autocomplete="off" data-enter="setup"></label>
 <button class="btn primary" style="width:100%" data-act="setup">إنشاء الحساب والبدء</button></div></div>`}
+
 
 function appHTML(me){
   const admin=isAdmin(me);
@@ -363,7 +484,7 @@ function teacherHome(me){
   else if(p.bypassTime)ban=`<div class="banner in">لديك صلاحية الإدخال في أي وقت</div>`;
   else ban=`<div class="banner ${g.open?'ok':'bad'}"><span>${g.open?'●':'■'} ${esc(g.msg)}</span></div>`;
   return`<h2 style="margin-bottom:2px">أهلاً ${esc(me.name)}</h2><p class="muted" style="margin:0 0 14px">${longDate(n.date)} — ${hijri(n.date)}</p>${ban}
-<h3 style="margin-bottom:10px">اختر الفصل</h3>${cls.length?`<div class="classes">${cls.map(c=>{const st=classCardStatus(c.id);return`<button class="ccard" data-act="openClass" data-cid="${c.id}"><b>${esc(c.name)}</b><span class="muted small">${(S.rosters[c.id]||[]).length} طالب</span><div>${st.html}</div></button>`}).join('')}</div>`:`<div class="card muted">لم يتم إسناد أي فصل لك بعد. تواصل مع الوكيل.</div>`}`;
+<h3 style="margin-bottom:10px">اختر الفصل</h3>${cls.length?`<div class="classes">${cls.map(c=>{const st=classCardStatus(c.id);return`<button class="ccard" data-act="openClass" data-cid="${esc(c.id)}"><b>${esc(c.name)}</b><span class="muted small">${(S.rosters[c.id]||[]).length} طالب</span><div>${st.html}</div></button>`}).join('')}</div>`:`<div class="card muted">لم يتم إسناد أي فصل لك بعد. تواصل مع الوكيل.</div>`}`;
 }
 
 /* ================= الصفحة الرئيسية للوكيل ================= */
@@ -379,7 +500,7 @@ function adminHome(){
 <button class="btn sm" data-act="extend" data-min="30">فتح 30 دقيقة</button>${S.settings.extendUntil>n.ts?`<button class="btn sm" data-act="extend" data-min="0">إلغاء التمديد</button>`:''}<button class="btn sm" data-act="nav" data-v="settings">إعدادات الوقت</button></div>
 <div class="kpis"><div class="kpi"><b>${students}</b><span>إجمالي الطلاب</span></div><div class="kpi ok"><b>${taken-A-E}</b><span>حاضرون (من تم تحضيرهم)</span></div><div class="kpi bad"><b>${A}</b><span>غائبون</span></div><div class="kpi in"><b>${E}</b><span>غياب بعذر</span></div><div class="kpi wn"><b>${L}</b><span>متأخرون</span></div><div class="kpi ${pending?'wn':'ok'}"><b>${pending}</b><span>فصول لم تُحضَّر</span></div></div>
 <div class="card tw"><table><thead><tr><th>الفصل</th><th>الطلاب</th><th>الحالة</th><th>بواسطة</th><th>غياب</th><th>بعذر</th><th>تأخر</th><th></th></tr></thead><tbody>
-${rows.map(r=>`<tr><td><b>${esc(r.c.name)}</b></td><td>${r.total}</td><td>${r.rec?`<span class="pill ok">تم ${fmtClock(r.rec.at)}</span>`:'<span class="pill wn">لم يتم</span>'}</td><td>${r.rec?esc(r.rec.bn||''):'—'}</td><td>${r.rec?r.a:'—'}</td><td>${r.rec?r.e:'—'}</td><td>${r.rec?r.l:'—'}</td><td><button class="btn sm" data-act="openClass" data-cid="${r.c.id}">${r.rec?'عرض/تعديل':'تحضير'}</button></td></tr>`).join('')||`<tr><td colspan="8" class="muted">لا توجد فصول بعد. ابدأ من تبويب «الفصول».</td></tr>`}</tbody></table></div>`;
+${rows.map(r=>`<tr><td><b>${esc(r.c.name)}</b></td><td>${r.total}</td><td>${r.rec?`<span class="pill ok">تم ${fmtClock(r.rec.at)}</span>`:'<span class="pill wn">لم يتم</span>'}</td><td>${r.rec?esc(r.rec.bn||''):'—'}</td><td>${r.rec?r.a:'—'}</td><td>${r.rec?r.e:'—'}</td><td>${r.rec?r.l:'—'}</td><td><button class="btn sm" data-act="openClass" data-cid="${esc(r.c.id)}">${r.rec?'عرض/تعديل':'تحضير'}</button></td></tr>`).join('')||`<tr><td colspan="8" class="muted">لا توجد فصول بعد. ابدأ من تبويب «الفصول».</td></tr>`}</tbody></table></div>`;
 }
 
 /* ================= شاشة التحضير ================= */
@@ -391,7 +512,7 @@ function attListHTML(ro){
   const list=all.map((s,i)=>({s,i:i+1})).filter(x=>!q||normKey(x.s.n).includes(q)||String(x.s.num||'').includes(q));
   if(!all.length)return`<div class="card muted">لا يوجد طلاب في هذا الفصل. أضفهم من تبويب «الطلاب».</div>`;
   if(!list.length)return`<div class="card muted">لا نتائج مطابقة.</div>`;
-  return list.map(({s,i})=>{const c=S.att.draft[s.id]||'p';return`<div class="sr c-${c}"><div class="sn"><span class="ix">${i}</span><span class="nm">${esc(s.n)}</span>${s.num?`<small>${esc(s.num)}</small>`:''}</div><div class="seg">${['p','a','l','e'].map(k=>`<button class="sb b-${k} ${c===k?'on':''}" data-act="mark" data-sid="${s.id}" data-code="${k}" ${ro?'disabled':''}>${CODES[k].t}</button>`).join('')}</div></div>`}).join('');
+  return list.map(({s,i})=>{const c=S.att.draft[s.id]||'p';return`<div class="sr c-${c}"><div class="sn"><span class="ix">${i}</span><span class="nm">${esc(s.n)}</span>${s.num?`<small>${esc(s.num)}</small>`:''}</div><div class="seg">${['p','a','l','e'].map(k=>`<button class="sb b-${k} ${c===k?'on':''}" data-act="mark" data-sid="${esc(s.id)}" data-code="${k}" ${ro?'disabled':''}>${CODES[k].t}</button>`).join('')}</div></div>`}).join('');
 }
 function attStatus(){const me=curUser(),a=S.att;const st=entryStatus(me,a.date,!!a.rec);if(st.ok&&!(S.rosters[a.cid]||[]).length)return{ok:false,msg:'لا يوجد طلاب في الفصل'};return st}
 function attBarHTML(){
@@ -405,8 +526,8 @@ function attendHTML(me){
   if(!a){return`<div class="card muted">${S.classes.length?'اختر فصلاً للبدء.':'أضف فصولاً أولاً من تبويب «الفصول».'}</div>`}
   const cls=myClasses(me),canDate=admin||(me.perms&&me.perms.pastDates);
   const head=`<div class="bar">${admin?'':`<button class="btn" data-act="nav" data-v="home">→ الفصول</button>`}
-<select id="aclass" data-chg="aclass" aria-label="الفصل">${cls.map(c=>`<option value="${c.id}" ${c.id===a.cid?'selected':''}>${esc(c.name)}</option>`).join('')}</select>
-${canDate?`<input type="date" id="adate" data-chg="adate" value="${a.date}" max="${n.date}" aria-label="التاريخ">`:`<span class="pill in">${longDate(a.date)}</span>`}</div>`;
+<select id="aclass" data-chg="aclass" aria-label="الفصل">${cls.map(c=>`<option value="${esc(c.id)}" ${c.id===a.cid?'selected':''}>${esc(c.name)}</option>`).join('')}</select>
+${canDate?`<input type="date" id="adate" data-chg="adate" value="${esc(a.date)}" max="${n.date}" aria-label="التاريخ">`:`<span class="pill in">${longDate(a.date)}</span>`}</div>`;
   if(a.loading)return head+`<div class="center"><div class="spin"></div></div>`;
   const st=attStatus();
   return head+`<div class="banner ${st.ok?'ok':'bad'}"><span>${st.ok?'●':'■'} ${esc(st.msg)}</span></div>
@@ -432,21 +553,23 @@ async function openAttend(cid,date){
   if(S.att&&S.att.tok===tok){S.att.loading=false;render()}
 }
 async function saveAttendance(){
-  const me=curUser(),a=S.att;if(!a||a.saving)return;
+  const a=S.att;if(!a||a.saving)return;
   const st=attStatus();if(!st.ok){toast(st.msg,'bad');paintAtt();return}
   const roster=S.rosters[a.cid]||[];const m=[];
   roster.forEach(s=>{const c=a.draft[s.id];if(c&&c!=='p')m.push(s.id+':'+c)});
-  const rec={by:me.id,bn:me.name,at:Date.now(),r:roster.map(s=>s.id),m};
-  const mo=a.date.slice(0,7);const ref=S.db.doc(`att/${a.cid}_${mo}`);
+  const rec={r:roster.map(s=>s.id),m};
   a.saving=true;paintAtt();
   try{
-    const snap=await ref.get();
-    if(snap.exists)await ref.update({days:{[a.date]:rec}});
-    else await ref.set({c:a.cid,mo,days:{[a.date]:rec}});
-    a.rec=decRec(rec);a.dirty=false;toast('تم حفظ التحضير بنجاح','ok');
+    /* الحفظ عبر دالة الخادم: تفحص الصلاحيات والوقت وتكتب اليوم المحدد فقط دون المساس ببقية الأيام */
+    const {data,error}=await sb.rpc('save_day',{p_class:a.cid,p_date:a.date,p_rec:rec});
+    if(error)throw dbErr(error);
+    a.rec=decRec(data);a.dirty=false;
+    if(a.date.slice(0,7)===S.subMo){(S.monthAtt[a.cid]=S.monthAtt[a.cid]||{})[a.date]=a.rec}
+    toast('تم حفظ التحضير بنجاح','ok');scheduleRefresh(300);
   }catch(e){toast(errMsg(e),'bad')}
   a.saving=false;paintAtt();
 }
+
 /* ================= الطلاب ================= */
 function stuList(){
   const st=S.stu,q=normKey(st.q);let out=[];
@@ -457,15 +580,15 @@ function studentsHTML(){
   const st=S.stu,list=stuList(),shown=list.slice(0,st.lim);const nSel=st.sel.size;
   if(!S.classes.length)return`<div class="card"><h3>لا توجد فصول</h3><p class="muted">أضف الفصول أولاً ثم أضف الطلاب يدوياً أو من ملف Excel.</p><button class="btn primary" data-act="nav" data-v="classes">إضافة فصول</button></div>`;
   const allSel=shown.length&&shown.every(s=>st.sel.has(s.id));
-  return`<div class="bar"><select id="sf" data-chg="sfcls" aria-label="الفصل"><option value="all">كل الفصول</option>${S.classes.map(c=>`<option value="${c.id}" ${st.cid===c.id?'selected':''}>${esc(c.name)} (${(S.rosters[c.id]||[]).length})</option>`).join('')}</select>
+  return`<div class="bar"><select id="sf" data-chg="sfcls" aria-label="الفصل"><option value="all">كل الفصول</option>${S.classes.map(c=>`<option value="${esc(c.id)}" ${st.cid===c.id?'selected':''}>${esc(c.name)} (${(S.rosters[c.id]||[]).length})</option>`).join('')}</select>
 <input type="search" id="sq" data-inp="sq" placeholder="بحث بالاسم أو الرقم" value="${esc(st.q)}"><span class="sp"></span>
 <button class="btn primary" data-act="addStu">+ طالب</button><button class="btn" data-act="importStu">استيراد من Excel</button>${S.dl?`<button class="btn" data-act="exportStu">تصدير</button>`:''}<button class="btn" data-act="moveSel" ${nSel?'':'disabled'}>نقل المحددين (${nSel})</button></div>
 <p class="muted small" style="margin:0 0 8px">عدد الطلاب المعروضين: ${list.length}${list.length>shown.length?` (يظهر أول ${shown.length})`:''}</p>
 <div class="card tw"><table><thead><tr><th><input type="checkbox" data-chg="selall" ${allSel?'checked':''} aria-label="تحديد الكل"></th><th>#</th><th>الاسم</th><th>الرقم</th><th>جوال ولي الأمر</th><th>الفصل</th><th></th></tr></thead><tbody>
-${shown.map((s,i)=>`<tr><td><input type="checkbox" data-chg="sel" data-sid="${s.id}" ${st.sel.has(s.id)?'checked':''}></td><td class="muted">${i+1}</td><td><b>${esc(s.n)}</b></td><td>${esc(s.num||'—')}</td><td>${esc(s.ph||'—')}</td><td>${esc(s.cn)}</td><td><button class="btn sm" data-act="editStu" data-sid="${s.id}">تعديل</button> <button class="btn sm ghost" data-act="delStu" data-sid="${s.id}" style="color:var(--bad)">حذف</button></td></tr>`).join('')||`<tr><td colspan="7" class="muted">لا يوجد طلاب.</td></tr>`}</tbody></table></div>
+${shown.map((s,i)=>`<tr><td><input type="checkbox" data-chg="sel" data-sid="${esc(s.id)}" ${st.sel.has(s.id)?'checked':''}></td><td class="muted">${i+1}</td><td><b>${esc(s.n)}</b></td><td>${esc(s.num||'—')}</td><td>${esc(s.ph||'—')}</td><td>${esc(s.cn)}</td><td><button class="btn sm" data-act="editStu" data-sid="${esc(s.id)}">تعديل</button> <button class="btn sm ghost" data-act="delStu" data-sid="${esc(s.id)}" style="color:var(--bad)">حذف</button></td></tr>`).join('')||`<tr><td colspan="7" class="muted">لا يوجد طلاب.</td></tr>`}</tbody></table></div>
 ${list.length>shown.length?`<button class="btn" data-act="moreStu" style="width:100%">عرض المزيد</button>`:''}`;
 }
-const classOpts=(sel,ph)=>(ph?`<option value="">${ph}</option>`:'')+S.classes.map(c=>`<option value="${c.id}" ${c.id===sel?'selected':''}>${esc(c.name)}</option>`).join('');
+const classOpts=(sel,ph)=>(ph?`<option value="">${ph}</option>`:'')+S.classes.map(c=>`<option value="${esc(c.id)}" ${c.id===sel?'selected':''}>${esc(c.name)}</option>`).join('');
 
 function studentModal(sid){
   const s=sid?S.idx.get(sid):null;
@@ -479,21 +602,27 @@ function studentModal(sid){
     if(!n){toast('أدخل اسم الطالب','bad');return false}if(!cid){toast('اختر الفصل','bad');return false}
     if(num){for(const [id,x] of S.idx){if(x.num===num&&id!==sid){toast('رقم الطالب مستخدم مسبقاً لطالب آخر','bad');return false}}}
     const rec={id:sid||rid('s'),n,num,ph};
-    if(!s){const list=clone(S.rosters[cid]||[]);list.push(rec);await S.db.doc('rosters/'+cid).set({list})}
-    else if(s.cid===cid){const list=clone(S.rosters[cid]).map(x=>x.id===sid?rec:x);await S.db.doc('rosters/'+cid).set({list})}
-    else{const tl=clone(S.rosters[cid]||[]);tl.push(rec);await S.db.doc('rosters/'+cid).set({list:tl});const sl=clone(S.rosters[s.cid]).filter(x=>x.id!==sid);await S.db.doc('rosters/'+s.cid).set({list:sl})}
+    const upsert=l=>l.some(x=>x.id===rec.id)?l.map(x=>x.id===rec.id?rec:x):[...l,rec];
+    if(!s||s.cid===cid){await mutRoster(cid,upsert)}
+    else{await mutRoster(cid,upsert);await mutRoster(s.cid,l=>l.filter(x=>x.id!==sid))}
     toast('تم الحفظ','ok');
   }}]);
 }
 async function moveStudents(sids,target){
-  const tl=clone(S.rosters[target]||[]),bySrc={};
+  const bySrc={};
   sids.forEach(id=>{const i=S.idx.get(id);if(!i||i.cid===target)return;(bySrc[i.cid]=bySrc[i.cid]||[]).push(id)});
-  const srcLists={};
-  for(const [src,ids] of Object.entries(bySrc)){srcLists[src]=clone(S.rosters[src]).filter(s=>{if(ids.includes(s.id)){tl.push(s);return false}return true})}
   const moved=Object.values(bySrc).reduce((a,b)=>a+b.length,0);
   if(!moved)return 0;
-  await S.db.doc('rosters/'+target).set({list:tl});
-  for(const [src,list] of Object.entries(srcLists))await S.db.doc('rosters/'+src).set({list});
+  /* نقرأ آخر نسخة من قوائم المصدر، نضيف الطلاب للهدف أولاً ثم نحذفهم من المصدر:
+     لو انقطع الاتصال بين الخطوتين يبقى الطالب مكرراً (لا يضيع) ويمكن تكرار النقل. */
+  const items=[];
+  for(const [src,ids] of Object.entries(bySrc)){
+    const snap=await S.db.doc('rosters/'+src).get();
+    const list=(snap.exists?snap.data().list:[])||[];
+    list.filter(s=>ids.includes(s.id)).forEach(s=>items.push(s));
+  }
+  await mutRoster(target,l=>{const have=new Set(l.map(x=>x.id));return [...l,...items.filter(s=>!have.has(s.id))]});
+  for(const [src,ids] of Object.entries(bySrc))await mutRoster(src,l=>l.filter(s=>!ids.includes(s.id)));
   return moved;
 }
 function moveModal(){
@@ -504,7 +633,7 @@ function moveModal(){
 async function deleteStudent(sid){
   const s=S.idx.get(sid);if(!s)return;
   if(!await askConfirm('حذف طالب',`هل تريد حذف الطالب <b>${esc(s.n)}</b> نهائياً؟ سيظهر اسمه في سجلات الغياب القديمة كـ «طالب محذوف». للنقل بين الفصول استخدم «تعديل».`,'حذف'))return;
-  try{const list=clone(S.rosters[s.cid]).filter(x=>x.id!==sid);await S.db.doc('rosters/'+s.cid).set({list});S.stu.sel.delete(sid);toast('تم الحذف','ok')}catch(e){toast(errMsg(e),'bad')}
+  try{await mutRoster(s.cid,l=>l.filter(x=>x.id!==sid));S.stu.sel.delete(sid);toast('تم الحذف','ok')}catch(e){toast(errMsg(e),'bad')}
 }
 
 /* ---------- الاستيراد من Excel ---------- */
@@ -547,7 +676,7 @@ async function runImport(){
   const im=S.imp;if(!im||!im.rows.length){toast('اختر ملفاً صحيحاً أولاً','bad');return false}
   const auto=chk('imp-auto'),def=val('imp-def');
   const byNorm=new Map(S.classes.map(c=>[normKey(c.name),c]));
-  const usedNums=new Set();S.idx.forEach(s=>{if(s.num)usedNums.add(s.num)});
+  let usedNums=new Set();S.idx.forEach(s=>{if(s.num)usedNums.add(s.num)});
   const groups=new Map();
   for(const r of im.rows){let cls=null,label=r.cls;
     if(r.cls)cls=byNorm.get(normKey(r.cls));else if(def){cls=S.classes.find(c=>c.id===def);label=cls?cls.name:''}
@@ -558,12 +687,18 @@ async function runImport(){
   for(const g of groups.values()){
     let cid;
     if(g.cls)cid=g.cls.id;else{cid=rid('c');await S.db.doc('classes/'+cid).set({name:g.label,created:Date.now()});byNorm.set(normKey(g.label),{id:cid,name:g.label})}
-    const list=clone(S.rosters[cid]||[]);const names=new Set(list.map(s=>normKey(s.n)));
-    for(const r of g.rows){
-      if((r.num&&usedNums.has(r.num))||names.has(normKey(r.n))){skipped++;continue}
-      list.push({id:rid('s'),n:r.n,num:r.num,ph:r.ph});names.add(normKey(r.n));if(r.num)usedNums.add(r.num);added++;
-    }
-    await S.db.doc('rosters/'+cid).set({list});
+    let gAdded=0,gSkipped=0,gUsed=null;
+    await mutRoster(cid,list=>{
+      /* تُعاد المحاولة عند تعارض متزامن، لذلك نبدأ العدّادات من الصفر في كل محاولة */
+      gAdded=0;gSkipped=0;gUsed=new Set(usedNums);
+      const names=new Set(list.map(s=>normKey(s.n)));
+      for(const r of g.rows){
+        if((r.num&&gUsed.has(r.num))||names.has(normKey(r.n))){gSkipped++;continue}
+        list.push({id:rid('s'),n:r.n,num:r.num,ph:r.ph});names.add(normKey(r.n));if(r.num)gUsed.add(r.num);gAdded++;
+      }
+      return list;
+    });
+    added+=gAdded;skipped+=gSkipped;usedNums=gUsed;
   }
   const notPlaced=skippedRows-added-skipped;
   toast(`تمت إضافة ${added} طالب${skipped?` • تجاهل ${skipped} مكرر`:''}${notPlaced>0?` • ${notPlaced} بدون فصل`:''}`,'ok');S.imp=null;
@@ -582,7 +717,7 @@ async function saveXlsx(filename,sheets){
 function classesHTML(){
   return`<div class="bar"><h3 style="margin:0">الفصول (${S.classes.length})</h3><span class="sp"></span><button class="btn primary" data-act="addClass">+ إضافة فصول</button></div>
 <div class="card tw"><table><thead><tr><th>الفصل</th><th>عدد الطلاب</th><th>المعلمون</th><th></th></tr></thead><tbody>
-${S.classes.map(c=>{const ts=S.users.filter(u=>u.role!=='admin'&&(u.classIds||[]).includes(c.id)).map(u=>u.name);return`<tr><td><b>${esc(c.name)}</b></td><td>${(S.rosters[c.id]||[]).length}</td><td class="wrapc">${ts.length?esc(ts.join('، ')):'<span class="muted">—</span>'}</td><td><button class="btn sm" data-act="renClass" data-cid="${c.id}">تعديل الاسم</button> <button class="btn sm ghost" data-act="delClass" data-cid="${c.id}" style="color:var(--bad)">حذف</button></td></tr>`}).join('')||`<tr><td colspan="4" class="muted">لا توجد فصول. اضغط «إضافة فصول».</td></tr>`}</tbody></table></div>`;
+${S.classes.map(c=>{const ts=S.users.filter(u=>u.role!=='admin'&&(u.classIds||[]).includes(c.id)).map(u=>u.name);return`<tr><td><b>${esc(c.name)}</b></td><td>${(S.rosters[c.id]||[]).length}</td><td class="wrapc">${ts.length?esc(ts.join('، ')):'<span class="muted">—</span>'}</td><td><button class="btn sm" data-act="renClass" data-cid="${esc(c.id)}">تعديل الاسم</button> <button class="btn sm ghost" data-act="delClass" data-cid="${esc(c.id)}" style="color:var(--bad)">حذف</button></td></tr>`}).join('')||`<tr><td colspan="4" class="muted">لا توجد فصول. اضغط «إضافة فصول».</td></tr>`}</tbody></table></div>`;
 }
 function addClassModal(){
   openModal('إضافة فصول',`<label class="f"><span>اكتب اسم كل فصل في سطر مستقل</span><textarea id="c-names" rows="6" placeholder="مثال:&#10;أول متوسط / 1&#10;أول متوسط / 2"></textarea></label>`,
@@ -603,7 +738,7 @@ async function deleteClass(cid){
   if(!await askConfirm('حذف فصل',`حذف الفصل <b>${esc(c.name)}</b>؟ سيتم إزالته من صلاحيات المعلمين.`,'حذف'))return;
   try{
     await S.db.doc('classes/'+cid).delete();await S.db.doc('rosters/'+cid).delete();
-    for(const u of S.users){if((u.classIds||[]).includes(cid))await S.db.doc('users/'+u.id).update({classIds:u.classIds.filter(x=>x!==cid)})}
+    for(const u of S.users){if((u.classIds||[]).includes(cid)){const {error}=await sb.from('profiles').update({class_ids:u.classIds.filter(x=>x!==cid)}).eq('id',u.id);if(error)throw dbErr(error)}}
     toast('تم حذف الفصل','ok');
   }catch(e){toast(errMsg(e),'bad')}
 }
@@ -617,47 +752,68 @@ ${S.users.slice().sort((a,b)=>(a.role==='admin'?0:1)-(b.role==='admin'?0:1)||cmp
   const adm=u.role==='admin';const cls=adm||(u.perms&&u.perms.allClasses)?'كل الفصول':(u.classIds||[]).map(cname).join('، ')||'—';
   const pr=adm?'كاملة':PERMS.filter(p=>u.perms&&u.perms[p[0]]).map(p=>p[1]).join('، ')||'—';
   return`<tr><td><b>${esc(u.name)}</b>${u.id===me.id?' <span class="pill in">أنت</span>':''}</td><td dir="ltr" style="text-align:right">${esc(u.username)}</td><td>${adm?'<span class="pill in">وكيل</span>':'معلم'}</td><td class="wrapc small">${esc(cls)}</td><td class="wrapc small">${esc(pr)}</td><td>${u.active===false?'<span class="pill bad">موقوف</span>':'<span class="pill ok">نشط</span>'}</td>
-<td><button class="btn sm" data-act="editUser" data-uid="${u.id}">تعديل</button> ${u.id!==me.id?`<button class="btn sm" data-act="togUser" data-uid="${u.id}">${u.active===false?'تفعيل':'إيقاف'}</button> <button class="btn sm ghost" data-act="delUser" data-uid="${u.id}" style="color:var(--bad)">حذف</button>`:''}</td></tr>`}).join('')}</tbody></table></div>
-<p class="muted small">ملاحظة: البيانات مشتركة بين الأجهزة عبر Supabase. يجب إعداد سياسات قاعدة البيانات من ملف supabase-schema.sql.</p>`;
+<td><button class="btn sm" data-act="editUser" data-uid="${esc(u.id)}">تعديل</button> ${u.id!==me.id?`<button class="btn sm" data-act="togUser" data-uid="${esc(u.id)}">${u.active===false?'تفعيل':'إيقاف'}</button> <button class="btn sm ghost" data-act="delUser" data-uid="${esc(u.id)}" style="color:var(--bad)">حذف</button>`:''}</td></tr>`}).join('')}</tbody></table></div>
+<p class="muted small">ملاحظة: الصلاحيات ووقت التحضير تُفرض داخل قاعدة البيانات نفسها، فلا يستطيع المعلم تجاوزها من المتصفح. اسم المستخدم لا يتغيّر بعد الإنشاء، وإيقاف الحساب يسري فوراً.</p>`;
 }
 function userModal(uid){
   const u=uid?S.users.find(x=>x.id===uid):null;const p=(u&&u.perms)||{mark:true,editSaved:true,stats:true};const adm=u&&u.role==='admin';
   openModal(u?'تعديل مستخدم':'إضافة معلم',`<label class="f"><span>الاسم</span><input type="text" id="u-name" value="${esc(u?u.name:'')}"></label>
-<label class="f"><span>اسم المستخدم (بالإنجليزية بدون مسافات)</span><input type="text" id="u-un" dir="ltr" autocapitalize="off" value="${esc(u?u.username:'')}"></label>
-<label class="f"><span>${u?'كلمة مرور جديدة (اتركها فارغة بدون تغيير)':'كلمة المرور (4 أحرف على الأقل)'}</span><input type="text" id="u-pw" dir="ltr" autocomplete="off"></label>
+<label class="f"><span>${u?'اسم المستخدم (لا يمكن تغييره)':'اسم المستخدم (إنجليزي بدون مسافات، 3 أحرف على الأقل)'}</span><input type="text" id="u-un" dir="ltr" autocapitalize="off" autocomplete="off" value="${esc(u?u.username:'')}" ${u?'readonly':''}></label>
+<label class="f"><span>${u?'كلمة مرور جديدة (اتركها فارغة بدون تغيير)':'كلمة المرور (6 أحرف على الأقل)'}</span><input type="password" id="u-pw" dir="ltr" autocomplete="new-password"></label>
+<div class="bar" style="margin-top:-4px"><label class="ck"><input type="checkbox" data-chg="showpw" data-for="u-pw"> إظهار كلمة المرور</label><button type="button" class="btn sm" data-act="genpw">توليد كلمة مرور</button></div>
 <label class="f"><span>الدور</span><select id="u-role" data-chg="urole"><option value="teacher" ${adm?'':'selected'}>معلم</option><option value="admin" ${adm?'selected':''}>وكيل (صلاحيات كاملة)</option></select></label>
 <div id="u-tbox" style="${adm?'display:none':''}">
-<div class="f"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الفصول المسندة</span><div class="ckbox">${S.classes.map(c=>`<label class="ck"><input type="checkbox" name="u-cls" value="${c.id}" ${u&&(u.classIds||[]).includes(c.id)?'checked':''}> ${esc(c.name)}</label>`).join('')||'<span class="muted small">لا توجد فصول</span>'}</div></div>
+<div class="f"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الفصول المسندة</span><div class="ckbox">${S.classes.map(c=>`<label class="ck"><input type="checkbox" name="u-cls" value="${esc(c.id)}" ${u&&(u.classIds||[]).includes(c.id)?'checked':''}> ${esc(c.name)}</label>`).join('')||'<span class="muted small">لا توجد فصول</span>'}</div></div>
 <div class="f"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الصلاحيات</span><div class="ckbox" style="max-height:none">${PERMS.map(pp=>`<label class="ck"><input type="checkbox" name="u-perm" value="${pp[0]}" ${p[pp[0]]?'checked':''}> ${pp[1]}</label>`).join('')}</div></div></div>
 <label class="ck"><input type="checkbox" id="u-act" ${u&&u.active===false?'':'checked'}> الحساب نشط</label>`,
   [{t:'إلغاء',close:true},{t:'حفظ',cls:'primary',fn:async()=>{
     const name=nrm(val('u-name')),un=nrm(val('u-un')).toLowerCase().replace(/\s/g,''),pw=val('u-pw'),role=val('u-role'),active=chk('u-act');
     if(!name||!un){toast('الاسم واسم المستخدم مطلوبان','bad');return false}
-    if(S.users.some(x=>x.username===un&&x.id!==uid)){toast('اسم المستخدم مستخدم مسبقاً','bad');return false}
-    if(!u&&pw.length<4){toast('كلمة المرور 4 أحرف على الأقل','bad');return false}
-    if(pw&&pw.length<4){toast('كلمة المرور 4 أحرف على الأقل','bad');return false}
-    const others=S.users.filter(x=>x.id!==uid&&x.role==='admin'&&x.active!==false).length;
-    if(others===0&&!(role==='admin'&&active)){toast('يجب أن يبقى وكيل واحد نشط على الأقل','bad');return false}
-    const perms={};document.querySelectorAll('input[name=u-perm]').forEach(e=>{perms[e.value]=e.checked});
+    if(!u){
+      if(!UN_RE.test(un)){toast('اسم المستخدم: من 3 إلى 30 حرفاً إنجليزياً أو أرقاماً أو ( . _ - ) بدون مسافات','bad');return false}
+      if(S.users.some(x=>String(x.username).toLowerCase()===un)){toast('اسم المستخدم مستخدم مسبقاً','bad');return false}
+      if(pw.length<6){toast('كلمة المرور 6 أحرف على الأقل','bad');return false}
+    }else if(pw&&pw.length<6){toast('كلمة المرور الجديدة قصيرة (6 أحرف على الأقل)','bad');return false}
+    if(u&&u.role==='admin'&&(role!=='admin'||!active)&&!S.users.some(x=>x.id!==uid&&x.role==='admin'&&x.active!==false)){toast('لا يمكن إزالة آخر وكيل نشط','bad');return false}
+    const perms={};document.querySelectorAll('input[name=u-perm]').forEach(e=>perms[e.value]=e.checked);
     const classIds=[...document.querySelectorAll('input[name=u-cls]:checked')].map(e=>e.value);
-    const data={name,username:un,role,active,classIds:role==='admin'?[]:classIds,perms:role==='admin'?{}:perms,created:u?u.created||Date.now():Date.now()};
-    if(pw){data.salt=rid('');data.hash=await pbkdf2(pw,data.salt)}else if(u){data.salt=u.salt;data.hash=u.hash}
-    const id=uid||rid('u');await S.db.doc('users/'+id).set(data);
-    if(id===S.meId&&pw)saveSess({id,hash:data.hash});
-    toast('تم حفظ المستخدم','ok');
+    const email=toEmail(un);
+    if(!u){
+      /* 1) إنشاء حساب المصادقة عبر عميل مؤقت حتى لا نخرج من جلسة الوكيل */
+      const tmp=window.supabase.createClient(SUPABASE_URL,SUPABASE_ANON_KEY,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false,storageKey:'att-tmp'}});
+      let r=await tmp.auth.signUp({email,password:pw});
+      if(r.error&&/already|registered/i.test(r.error.message||'')){
+        const c=await sb.rpc('admin_cleanup_orphan',{p_email:email});
+        if(c.error)throw dbErr(c.error);
+        if(!c.data){toast('اسم المستخدم مستخدم مسبقاً','bad');return false}
+        r=await tmp.auth.signUp({email,password:pw});
+      }
+      if(r.error){toast(authMsg(r.error),'bad');return false}
+      if(!r.data.session){toast('فعّل خيار تسجيل الحسابات بدون تأكيد البريد (Confirm email = OFF) في إعدادات Supabase','bad');return false}
+    }
+    /* 2) ربط الحساب بملف المستخدم (الدور والفصول والصلاحيات) عبر دالة الوكيل */
+    const {data:id,error}=await sb.rpc('admin_save_user',{p_id:uid||null,p_email:email,p_username:un,p_name:name,p_role:role,p_active:active,p_class_ids:role==='admin'?[]:classIds,p_perms:role==='admin'?{}:perms});
+    if(error)throw dbErr(error);
+    if(u&&pw){const r2=await sb.rpc('admin_set_password',{p_id:id,p_pw:pw});if(r2.error)throw dbErr(r2.error)}
+    toast('تم حفظ المستخدم','ok');scheduleRefresh(50);
   }}]);
 }
 async function toggleUser(uid){
   const u=S.users.find(x=>x.id===uid);if(!u)return;const to=u.active===false;
   if(!to&&u.role==='admin'&&!S.users.some(x=>x.id!==uid&&x.role==='admin'&&x.active!==false)){toast('لا يمكن إيقاف آخر وكيل','bad');return}
-  try{await S.db.doc('users/'+uid).update({active:to});toast(to?'تم تفعيل الحساب':'تم إيقاف الحساب','ok')}catch(e){toast(errMsg(e),'bad')}
+  try{
+    const {data,error}=await sb.from('profiles').update({active:to}).eq('id',uid).select('id');
+    if(error)throw dbErr(error);
+    if(!data||!data.length)throw new Error('لم يتم التعديل، تحقق من الصلاحيات');
+    toast(to?'تم تفعيل الحساب':'تم إيقاف الحساب','ok');scheduleRefresh(50);
+  }catch(e){toast(errMsg(e),'bad')}
 }
 async function deleteUser(uid){
   const u=S.users.find(x=>x.id===uid);if(!u)return;
-  if(u.role==='admin'&&!S.users.some(x=>x.id!==uid&&x.role==='admin'&&x.active!==false)){toast('لا يمكن حذف آخر وكيل','bad');return}
-  if(!await askConfirm('حذف مستخدم',`حذف حساب <b>${esc(u.name)}</b>؟ تبقى سجلات التحضير التي أدخلها كما هي.`,'حذف'))return;
-  try{await S.db.doc('users/'+uid).delete();toast('تم الحذف','ok')}catch(e){toast(errMsg(e),'bad')}
+  if(!await askConfirm('حذف مستخدم',`حذف الحساب <b>${esc(u.name)}</b> نهائياً؟ لن يتمكن من الدخول بعدها، وتبقى سجلات التحضير التي أدخلها.`,'حذف'))return;
+  try{const {error}=await sb.rpc('admin_delete_user',{p_id:uid});if(error)throw dbErr(error);toast('تم حذف المستخدم','ok');scheduleRefresh(50)}catch(e){toast(errMsg(e),'bad')}
 }
+
 /* ================= الإحصائيات ================= */
 function presetRange(p){
   const n=nowInfo(),t=n.date;
@@ -697,8 +853,8 @@ function statsHTML(me){
   const presets=[['today','اليوم'],['week','هذا الأسبوع'],['month','هذا الشهر'],['last','الشهر الماضي'],['90','آخر 90 يوماً'],['custom','مخصص']];
   let html=`<div class="seglist">${modes.map(m=>`<button class="${st.mode===m[0]?'on':''}" data-act="stMode" data-m="${m[0]}">${m[1]}</button>`).join('')}</div>
 <div class="card"><div class="bar" style="margin:0"><label class="f" style="margin:0"><span>الفترة</span><select id="st-pre" data-chg="stpre">${presets.map(p=>`<option value="${p[0]}" ${st.preset===p[0]?'selected':''}>${p[1]}</option>`).join('')}</select></label>
-<label class="f" style="margin:0"><span>من</span><input type="date" id="st-from" data-chg="stfrom" value="${st.from}"></label><label class="f" style="margin:0"><span>إلى</span><input type="date" id="st-to" data-chg="stto" value="${st.to}"></label>
-${st.mode==='class'?`<label class="f" style="margin:0"><span>الفصل</span><select id="st-cls" data-chg="stcls">${cls.map(c=>`<option value="${c.id}" ${c.id===st.cid?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}
+<label class="f" style="margin:0"><span>من</span><input type="date" id="st-from" data-chg="stfrom" value="${esc(st.from)}"></label><label class="f" style="margin:0"><span>إلى</span><input type="date" id="st-to" data-chg="stto" value="${esc(st.to)}"></label>
+${st.mode==='class'?`<label class="f" style="margin:0"><span>الفصل</span><select id="st-cls" data-chg="stcls">${cls.map(c=>`<option value="${esc(c.id)}" ${c.id===st.cid?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}
 <span class="sp"></span>${S.dl&&st.recs?`<button class="btn" data-act="stExport">تصدير Excel</button>`:''}</div>
 <p class="muted small" style="margin:10px 0 0">نسبة الحضور = (الأيام المسجلة − الغياب − الغياب بعذر) ÷ الأيام المسجلة. التأخر لا يُحتسب غياباً.</p></div>`;
   if(st.loading||!st.recs)return html+`<div class="center"><div class="spin"></div></div>`;
@@ -741,7 +897,7 @@ function stuResultsHTML(cls){
   const q=normKey(S.st.q);if(q.length<2||S.st.sid)return'';
   const allowed=new Set(cls.map(c=>c.id));const out=[];
   for(const s of S.idx.values()){if(!allowed.has(s.cid))continue;if(normKey(s.n).includes(q)||(s.num&&String(s.num).includes(digits(S.st.q).trim()))){out.push(s);if(out.length>=12)break}}
-  return out.length?`<div class="res">${out.map(s=>`<button data-act="pickStu" data-sid="${s.id}"><b>${esc(s.n)}</b><span class="muted small">${esc(s.cn)}</span></button>`).join('')}</div>`:`<p class="muted small">لا نتائج.</p>`;
+  return out.length?`<div class="res">${out.map(s=>`<button data-act="pickStu" data-sid="${esc(s.id)}"><b>${esc(s.n)}</b><span class="muted small">${esc(s.cn)}</span></button>`).join('')}</div>`:`<p class="muted small">لا نتائج.</p>`;
 }
 function statSchoolHTML(){
   const st=S.st;const rows=S.classes.map(c=>{const recs=st.recs.filter(r=>r.c===c.id);const t=[...tally(recs).values()].reduce((s,x)=>({d:s.d+x.d,a:s.a+x.a,l:s.l+x.l,e:s.e+x.e}),{d:0,a:0,l:0,e:0});return{c,days:new Set(recs.map(r=>r.date)).size,...t,p:pct(t)}});
@@ -779,43 +935,73 @@ function settingsHTML(){
 async function saveSettings(){
   const d=S.sd;if(!d)return;
   if(hm(d.end)<=hm(d.start)){toast('وقت النهاية يجب أن يكون بعد وقت البداية','bad');return}
-  try{await S.db.doc('meta/settings').set({...S.settings,schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz});toast('تم حفظ الإعدادات','ok');S.sd=null;render()}catch(e){toast(errMsg(e),'bad')}
+  try{
+    /* نقرأ آخر نسخة من الخادم ونعدّل الحقول المعنية فقط (لا نمسح extendUntil) */
+    await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz}));
+    toast('تم حفظ الإعدادات','ok');S.sd=null;render();
+  }catch(e){toast(errMsg(e),'bad')}
 }
 async function extendEntry(min){
-  try{await S.db.doc('meta/settings').set({...S.settings,extendUntil:min?Date.now()+min*60000:0});toast(min?`تم فتح الإدخال ${min} دقيقة`:'تم إلغاء التمديد','ok')}catch(e){toast(errMsg(e),'bad')}
+  try{
+    const {error}=await sb.rpc('admin_extend',{p_min:min});if(error)throw dbErr(error);
+    toast(min?`تم فتح الإدخال ${min} دقيقة`:'تم إلغاء التمديد','ok');scheduleRefresh(50);
+  }catch(e){toast(errMsg(e),'bad')}
 }
 function myPwModal(){
   const me=curUser();
   openModal('تغيير كلمة المرور',`<label class="f"><span>كلمة المرور الحالية</span><input type="password" id="pw0" autocomplete="current-password"></label><label class="f"><span>كلمة المرور الجديدة (6 أحرف على الأقل)</span><input type="password" id="pw1" autocomplete="new-password"></label>`,
   [{t:'إلغاء',close:true},{t:'تغيير',cls:'primary',fn:async()=>{
-    if(await pbkdf2(val('pw0'),me.salt)!==me.hash){toast('كلمة المرور الحالية غير صحيحة','bad');return false}
     if(val('pw1').length<6){toast('كلمة المرور الجديدة قصيرة','bad');return false}
-    const salt=rid(''),hash=await pbkdf2(val('pw1'),salt);await S.db.doc('users/'+me.id).update({salt,hash});saveSess({id:me.id,hash});toast('تم تغيير كلمة المرور','ok')}}]);
+    const chk0=await sb.auth.signInWithPassword({email:toEmail(me.username),password:val('pw0')});
+    if(chk0.error){toast('كلمة المرور الحالية غير صحيحة','bad');return false}
+    const {error}=await sb.auth.updateUser({password:val('pw1')});
+    if(error){toast(authMsg(error),'bad');return false}
+    toast('تم تغيير كلمة المرور','ok');
+  }}]);
 }
 
 /* ================= الأحداث ================= */
 const ACT={
   async login(){
-    const un=nrm(val('lu')).toLowerCase(),pw=val('lp');if(!un||!pw){toast('أدخل اسم المستخدم وكلمة المرور','bad');return}
-    const u=S.users.find(x=>x.username===un);const h=u?await pbkdf2(pw,u.salt):null;
-    if(!u||h!==u.hash){toast('اسم المستخدم أو كلمة المرور غير صحيحة','bad');return}
-    if(u.active===false){toast('هذا الحساب موقوف، راجع الوكيل','bad');return}
-    S.meId=u.id;saveSess(u);S.view='home';S.att=null;render();
+    if(S.busy)return;
+    const un=nrm(val('lu')).toLowerCase().replace(/\s/g,''),pw=val('lp');
+    if(!un||!pw){toast('أدخل اسم المستخدم وكلمة المرور','bad');return}
+    S.busy=true;
+    try{
+      const {data,error}=await sb.auth.signInWithPassword({email:toEmail(un),password:pw});
+      if(error){toast(error.status===400||error.code==='invalid_credentials'?'اسم المستخدم أو كلمة المرور غير صحيحة':authMsg(error),'bad');return}
+      let ok=false,failed=false;
+      try{ok=await startSession(data.user.id)}catch(e){failed=true;console.error(e);toast(errMsg(e),'bad')}
+      if(!ok){try{await sb.auth.signOut()}catch(e){}S.meId=null;S.phase='auth';render();if(!failed)toast('هذا الحساب موقوف أو غير مضاف للنظام، راجع الوكيل','bad')}
+    }finally{S.busy=false}
   },
   async setup(){
-    const school=nrm(val('su-school')),name=nrm(val('su-name')),un=nrm(val('su-un')).toLowerCase().replace(/\s/g,''),pw=val('su-pw');
-    if(!school||!name||!un){toast('أكمل جميع الحقول','bad');return}if(pw.length<6){toast('كلمة المرور 6 أحرف على الأقل','bad');return}
+    if(S.busy)return;
+    const school=nrm(val('su-school')),name=nrm(val('su-name')),un=nrm(val('su-un')).toLowerCase().replace(/\s/g,''),pw=val('su-pw'),code=val('su-code').trim();
+    if(!school||!name||!un||!code){toast('أكمل جميع الحقول','bad');return}
+    if(!UN_RE.test(un)){toast('اسم المستخدم: من 3 إلى 30 حرفاً إنجليزياً أو أرقاماً أو ( . _ - ) بدون مسافات','bad');return}
+    if(pw.length<6){toast('كلمة المرور 6 أحرف على الأقل','bad');return}
+    S.busy=true;
     try{
-      const lease=await S.db.doc('meta/setup').acquire({holder:rid('h'),ttlMs:30000});
-      if(!lease.acquired){toast('يجري إعداد النظام من جهاز آخر، انتظر لحظات','bad');return}
-      const ex=await S.db.collection('users').get();if(ex.docs.some(d=>d.data().role==='admin'))return;
-      const salt=rid(''),hash=await pbkdf2(pw,salt),id=rid('u');
-      await S.db.doc('meta/settings').set({...DEF,schoolName:school});
-      await S.db.doc('users/'+id).set({name,username:un,role:'admin',active:true,classIds:[],perms:{},salt,hash,created:Date.now()});
-      S.meId=id;saveSess({id,hash});S.view='home';render();toast('تم إنشاء الحساب. مرحباً بك','ok');
-    }catch(e){toast(errMsg(e),'bad')}
+      const email=toEmail(un);
+      let r=await sb.auth.signUp({email,password:pw});
+      if(r.error&&/already|registered/i.test(r.error.message||''))r=await sb.auth.signInWithPassword({email,password:pw});
+      if(r.error){toast(/invalid login/i.test(r.error.message||'')?'اسم المستخدم محجوز، اختر اسماً آخر':authMsg(r.error),'bad');return}
+      if(!r.data.session){toast('فعّل خيار تسجيل الحسابات بدون تأكيد البريد (Confirm email = OFF) في إعدادات Supabase ثم أعد المحاولة','bad');return}
+      const c=await sb.rpc('claim_first_admin',{p_name:name,p_username:un,p_school:school,p_code:code});
+      if(c.error){try{await sb.auth.signOut()}catch(e){}toast(errMsg(dbErr(c.error)),'bad');return}
+      S.needsSetup=false;
+      let ok=false;try{ok=await startSession(r.data.user.id)}catch(e){console.error(e);toast(errMsg(e),'bad')}
+      if(ok)toast('تم إنشاء الحساب. مرحباً بك','ok');else{S.phase='auth';render()}
+    }catch(e){console.error(e);toast(errMsg(e),'bad')}
+    finally{S.busy=false}
   },
-  logout(){S.meId=null;S.att=null;S.view='home';S.st=null;try{localStorage.removeItem('att.sess')}catch(e){}render()},
+  async logout(){try{await sb.auth.signOut()}catch(e){}resetSession()},
+  genpw(){
+    const a='abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const pw=Array.from(crypto.getRandomValues(new Uint8Array(10)),b=>a[b%a.length]).join('');
+    const i=$('#u-pw');if(i){i.value=pw;i.type='text';const c=document.querySelector('[data-chg=showpw]');if(c)c.checked=true}
+  },
   nav(t){
     const v=t.dataset.v,me=curUser();S.view=v;
     if(v==='attend'&&isAdmin(me)){const cid=(S.att&&S.att.cid)||(S.classes[0]&&S.classes[0].id);if(cid){openAttend(cid,(S.att&&S.att.date)||nowInfo().date);return}}
@@ -858,6 +1044,7 @@ const CHG={
   sfcls(t){S.stu.cid=t.value;S.stu.sel=new Set();S.stu.lim=100;render()},
   sel(t){t.checked?S.stu.sel.add(t.dataset.sid):S.stu.sel.delete(t.dataset.sid);render()},
   selall(t){const shown=stuList().slice(0,S.stu.lim);shown.forEach(s=>t.checked?S.stu.sel.add(s.id):S.stu.sel.delete(s.id));render()},
+  showpw(t){const i=document.getElementById(t.dataset.for);if(i)i.type=t.checked?'text':'password'},
   urole(t){const b=$('#u-tbox');if(b)b.style.display=t.value==='admin'?'none':''},
   impfile(t){
     const f=t.files&&t.files[0];if(!f)return;
