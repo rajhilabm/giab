@@ -48,6 +48,8 @@ body::before{content:'';position:fixed;top:0;left:0;right:0;height:env(safe-area
 .btn.primary{background:var(--br);border-color:var(--br);color:#fff}.btn.primary:hover{background:var(--brd)}
 .btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .btn.wa{background:#25d366;border-color:#25d366;color:#0b2e1c}.btn.wa:hover{background:#1eb958}
+.btn.openin{width:100%;background:#dc2626;border-color:#dc2626;color:#fff;font-size:20px;font-weight:800;padding:16px;border-radius:14px;box-shadow:0 6px 18px rgba(220,38,38,.28)}.btn.openin:hover{background:#b91c1c}
+.orsep{display:flex;align-items:center;gap:10px;color:var(--mut);font-size:13px;margin:18px 0 14px}.orsep::before,.orsep::after{content:'';flex:1;height:1px;background:var(--ln)}
 .optbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--sf);border:1px solid var(--ln);border-radius:14px;padding:10px 14px;margin-bottom:12px;box-shadow:var(--sh)}
 .optbar label.ck{padding:0}
 .btn.ghost{background:transparent}
@@ -210,7 +212,7 @@ async function refreshApp(){
 }
 
 /* ================= الثوابت والأدوات ================= */
-const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false};
+const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false,openEntry:false};
 const EMAIL_DOMAIN='att.local';   /* نطاق داخلي وهمي لتحويل اسم المستخدم إلى بريد لـ Supabase Auth؛ لا تُرسل عليه رسائل. إن رفضه Supabase غيّره لنطاق حقيقي */
 const toEmail=un=>un+'@'+EMAIL_DOMAIN;
 const UN_RE=/^[a-z0-9._-]{3,30}$/;
@@ -364,7 +366,7 @@ async function loadAllData(){
   const [st,cl,ro,ss]=await Promise.all([S.db.doc('meta/settings').get(),S.db.collection('classes').get(),S.db.collection('rosters').get(),sb.rpc('app_status')]);
   if(ss&&ss.data)syncClock(ss.data.now_ms);
   const settings=st.exists?{...DEF,...st.data()}:{...DEF};
-  setNoPwFlag(settings.noPw);
+  setNoPwFlag(settings.noPw);setOpenFlag(settings.openEntry);S.openEntry=!!settings.openEntry;
   const classes=cl.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>cmpAr(a.name,b.name));
   const rosters={};ro.docs.forEach(d=>rosters[d.id]=d.data().list||[]);
   const sig=JSON.stringify([settings,classes,rosters,pr]);
@@ -450,7 +452,7 @@ async function init(){
       if(!ok){try{await sb.auth.signOut()}catch(e){}}
     }
   }catch(e){console.error(e);S.fatal=true;S.fatalMsg=errMsg(e);render();return}
-  if(!S.meId){S.phase='auth';render()}
+  if(!S.meId){await probeOpenEntry();S.phase='auth';render()}
   sb.auth.onAuthStateChange(ev=>{if(ev==='SIGNED_OUT'&&S.meId)setTimeout(resetSession,0)});
   setInterval(()=>{if(S.phase==='app')afterData(false)},20000);
 }
@@ -498,11 +500,15 @@ function shell(){
   return appHTML(me);
 }
 const schoolName=()=>S.settings.schoolName||S.school||'نظام تحضير الطلاب';
-function loginHTML(){return`<div class="auth"><div class="card"><div style="text-align:center;margin-bottom:14px"><img class="applogo" src="${ICON_URI}" alt="" width="64" height="64"><h1>${esc(schoolName())}</h1><p class="muted" style="margin:4px 0 0">تسجيل الدخول للتحضير</p></div>
+function loginHTML(){
+  const op=openOn(),np=noPwFlag()&&!op;   /* مع الإدخال المفتوح يصبح النموذج للوكيل فيظهر حقل كلمة المرور دائماً */
+  return`<div class="auth"><div class="card"><div style="text-align:center;margin-bottom:14px"><img class="applogo" src="${ICON_URI}" alt="" width="64" height="64"><h1>${esc(schoolName())}</h1><p class="muted" style="margin:4px 0 0">${op?'نظام تحضير الطلاب':'تسجيل الدخول للتحضير'}</p></div>
+${op?`<button class="btn openin" id="openin" data-act="openEntry">إدخال الغياب</button>
+<div class="orsep">دخول الوكيل</div>`:''}
 <label class="f"><span>اسم المستخدم</span><input type="text" id="lu" dir="ltr" autocomplete="username" autocapitalize="off" data-enter="login"></label>
-<div id="lp-box" ${noPwFlag()?'style="display:none"':''}><label class="f"><span>كلمة المرور</span><input type="password" id="lp" autocomplete="current-password" data-enter="login"></label></div>
-${noPwFlag()?`<p class="muted small" style="margin:-4px 0 12px">الدخول للمعلمين باسم المستخدم فقط. <button class="btn sm ghost" data-act="showPw" style="color:var(--br)">دخول بكلمة المرور (للوكيل)</button></p>`:''}
-<button class="btn primary" style="width:100%" data-act="login">دخول</button>
+<div id="lp-box" ${np?'style="display:none"':''}><label class="f"><span>كلمة المرور</span><input type="password" id="lp" autocomplete="current-password" data-enter="login"></label></div>
+${np?`<p class="muted small" style="margin:-4px 0 12px">الدخول للمعلمين باسم المستخدم فقط. <button class="btn sm ghost" data-act="showPw" style="color:var(--br)">دخول بكلمة المرور (للوكيل)</button></p>`:''}
+<button class="btn ${op?'':'primary'}" style="width:100%" data-act="login">${op?'دخول الوكيل':'دخول'}</button>
 ${canInstall()?'<button class="btn" style="width:100%;margin-top:10px" data-act="install">📲 تثبيت التطبيق على الجهاز</button>':''}</div></div>`}
 function setupHTML(){return`<div class="auth"><div class="card"><img class="applogo" src="${ICON_URI}" alt="" width="64" height="64"><h1 style="text-align:center">إعداد النظام لأول مرة</h1><p class="muted">سيتم إنشاء حساب الوكيل (المدير). بعدها تضيف الفصول والطلاب والمعلمين من لوحة التحكم.</p>
 <label class="f"><span>اسم المدرسة</span><input type="text" id="su-school"></label>
@@ -826,10 +832,71 @@ const siteLink=()=>nrm(S.settings.siteUrl)||autoLink();
 const AUTO_SALT='9731';
 const autoPw=un=>'auto.'+String(un||'').toLowerCase()+'.'+AUTO_SALT;
 const noPwOn=()=>!!S.settings.noPw;
-const noPwFor=u=>noPwOn()&&u&&u.role!=='admin';
+const noPwFor=u=>noPwOn()&&u&&u.role!=='admin'&&!isGuest(u);
 /* نتذكر الخيار في هذا الجهاز لإخفاء حقل كلمة المرور في صفحة الدخول قبل تسجيل الدخول */
 const setNoPwFlag=v=>{try{localStorage.setItem('att-nopw',v?'1':'0')}catch(e){}};
 const noPwFlag=()=>{try{return localStorage.getItem('att-nopw')==='1'}catch(e){return false}};
+/* ---------- الإدخال المفتوح: حساب معلم مشترك يدخل بزر واحد بدون اسم مستخدم ---------- */
+const OPEN_UN='open.entry';
+const OPEN_PW='open.'+AUTO_SALT+'.entry';
+const isGuest=u=>!!u&&String(u.username||'').toLowerCase()===OPEN_UN;
+const setOpenFlag=v=>{try{localStorage.setItem('att-open',v?'1':'0')}catch(e){}};
+const openFlag=()=>{try{return localStorage.getItem('att-open')==='1'}catch(e){return false}};
+const openOn=()=>S.openEntry===true||(S.openEntry===undefined&&openFlag());
+/* قبل تسجيل الدخول: نسأل قاعدة البيانات هل الإدخال المفتوح مفعّل (دالة open_entry_status الاختيارية) */
+async function probeOpenEntry(){
+  if(new URLSearchParams(location.search).get('open')==='1')setOpenFlag(true);
+  try{
+    const {data,error}=await sb.rpc('open_entry_status');
+    if(error)return;                      /* الدالة غير مضافة: نعتمد على ما حُفظ في هذا الجهاز */
+    S.openEntry=!!data;setOpenFlag(!!data);
+  }catch(e){}
+}
+async function openEntryLogin(){
+  if(S.busy)return;S.busy=true;
+  const b=$('#openin');if(b){b.disabled=true;b.textContent='جاري الدخول…'}
+  try{
+    const {data,error}=await sb.auth.signInWithPassword({email:toEmail(OPEN_UN),password:OPEN_PW});
+    if(error){S.openEntry=false;setOpenFlag(false);render();toast('الإدخال المفتوح غير مفعّل حالياً، تواصل مع الوكيل','bad');return}
+    let ok=false;
+    try{ok=await startSession(data.user.id)}catch(e){console.error(e);toast(errMsg(e),'bad')}
+    if(!ok){try{await sb.auth.signOut()}catch(e){}S.meId=null;S.phase='auth';S.openEntry=false;setOpenFlag(false);render();toast('الإدخال المفتوح موقوف حالياً','bad')}
+  }finally{S.busy=false;const b2=$('#openin');if(b2){b2.disabled=false;b2.textContent='إدخال الغياب'}}
+}
+async function toggleOpenEntry(on){
+  const ok=await askConfirm(on?'فتح إدخال الغياب للجميع':'إيقاف الإدخال المفتوح',
+    on?`سيظهر في صفحة الدخول زر أحمر <b>«إدخال الغياب»</b> يدخل به أي شخص مباشرة كمعلم ويرى <b>جميع الفصول</b> بدون اسم مستخدم أو كلمة مرور، ويبقى حقل اسم المستخدم وكلمة المرور تحته لدخول الوكيل.<br><br><b>تنبيه:</b> أي شخص يملك رابط الموقع سيتمكن من إدخال الغياب، وستظهر السجلات باسم «إدخال الغياب».`
+      :'سيختفي زر «إدخال الغياب» ويُغلق الحساب المشترك فوراً، ويخرج كل من دخل به.',
+    on?'تفعيل':'إيقاف',!on);
+  if(!ok){render();return}
+  try{
+    let g=S.users.find(isGuest);
+    const perms={...((g&&g.perms)||{}),mark:true,allClasses:true,editSaved:true};
+    if(on){
+      if(!g){
+        const id=await createTeacher({name:'إدخال الغياب',un:OPEN_UN,pw:OPEN_PW,role:'teacher',active:true,classIds:[],perms});
+        g={id};
+      }else{
+        const {error}=await sb.rpc('admin_save_user',{p_id:g.id,p_email:toEmail(OPEN_UN),p_username:OPEN_UN,p_name:g.name||'إدخال الغياب',p_role:'teacher',p_active:true,p_class_ids:g.classIds||[],p_perms:perms});
+        if(error)throw dbErr(error);
+        const r2=await sb.rpc('admin_set_password',{p_id:g.id,p_pw:OPEN_PW});if(r2.error)throw dbErr(r2.error);
+      }
+      await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),openEntry:true}));
+      S.settings.openEntry=true;S.openEntry=true;setOpenFlag(true);
+      toast('تم فتح إدخال الغياب للجميع','ok');
+    }else{
+      await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),openEntry:false}));
+      S.settings.openEntry=false;S.openEntry=false;setOpenFlag(false);
+      if(g){
+        /* نغيّر كلمة المرور ونوقف الحساب حتى لا يبقى الدخول به ممكناً */
+        const r1=await sb.rpc('admin_set_password',{p_id:g.id,p_pw:genPassword(16)});if(r1.error)throw dbErr(r1.error);
+        const {error}=await sb.from('profiles').update({active:false}).eq('id',g.id);if(error)throw dbErr(error);
+      }
+      toast('تم إيقاف الإدخال المفتوح','ok');
+    }
+  }catch(e){toast(errMsg(e),'bad')}
+  S.sd=null;S.dataSig=null;scheduleRefresh(50);render();
+}
 const DEF_WA=`مرحباً أ. {name} 👋
 تم إنشاء حسابك في نظام تحضير الطلاب بـ {school}.
 
@@ -1022,7 +1089,7 @@ function cardUser(uid){
   if(!pwKnown(u))return pwPrompt(u,()=>cardUser(uid));
   printCards([u],'بطاقة: '+u.name);
 }
-const sortedUsers=()=>S.users.slice().sort((a,b)=>(a.role==='admin'?0:1)-(b.role==='admin'?0:1)||cmpAr(a.name,b.name));
+const sortedUsers=()=>S.users.filter(u=>!isGuest(u)).sort((a,b)=>(a.role==='admin'?0:1)-(b.role==='admin'?0:1)||cmpAr(a.name,b.name));
 function printAllCards(){
   const us=sortedUsers();
   if(!us.length){toast('لا يوجد مستخدمون','bad');return}
@@ -1070,7 +1137,7 @@ async function setAllClassesForAll(on){
 
 /* ---------- الدخول بدون كلمة مرور ---------- */
 async function toggleNoPw(on){
-  const tch=S.users.filter(u=>u.role!=='admin');
+  const tch=S.users.filter(u=>u.role!=='admin'&&!isGuest(u));
   const ok=await askConfirm(on?'دخول المعلمين بدون كلمة مرور':'إيقاف الدخول بدون كلمة مرور',
     on?`سيتم ضبط كلمة مرور داخلية تلقائية لجميع المعلمين (${tch.length}) ليصبح دخولهم باسم المستخدم فقط.<br><br><b>تنبيه أمني:</b> أي شخص يعرف اسم المستخدم سيستطيع الدخول إلى حساب المعلم. حساب الوكيل يبقى بكلمة مرور.`
       :`سيعود المعلمون للدخول بكلمة مرور. كلمات مرورهم الحالية تلقائية ويمكن تخمينها، لذا يُنصح بتوليد كلمات مرور جديدة بعد الإيقاف.`,
@@ -1119,21 +1186,21 @@ function teachersHTML(){
 ${S.users.slice().sort((a,b)=>(a.role==='admin'?0:1)-(b.role==='admin'?0:1)||cmpAr(a.name,b.name)).map(u=>{
   const adm=u.role==='admin';const cls=adm||(u.perms&&u.perms.allClasses)?'كل الفصول':(u.classIds||[]).map(cname).join('، ')||'—';
   const pr=adm?'كاملة':PERMS.filter(p=>u.perms&&u.perms[p[0]]).map(p=>p[1]).join('، ')||'—';
-  return`<tr><td><b>${esc(u.name)}</b>${u.id===me.id?' <span class="pill in">أنت</span>':''}</td><td dir="ltr" style="text-align:right">${esc(u.username)}</td><td>${adm?'<span class="pill in">وكيل</span>':'معلم'}</td><td class="wrapc small">${esc(cls)}</td><td class="wrapc small">${esc(pr)}</td><td>${u.active===false?'<span class="pill bad">موقوف</span>':'<span class="pill ok">نشط</span>'}</td>
-<td><button class="btn sm" data-act="editUser" data-uid="${esc(u.id)}">تعديل</button> <button class="btn sm wa" data-act="waUser" data-uid="${esc(u.id)}" title="إرسال بيانات الدخول عبر واتساب">واتساب</button> <button class="btn sm" data-act="cardUser" data-uid="${esc(u.id)}" title="طباعة بطاقة الدخول">بطاقة</button> ${u.id!==me.id?`<button class="btn sm" data-act="togUser" data-uid="${esc(u.id)}">${u.active===false?'تفعيل':'إيقاف'}</button> <button class="btn sm ghost" data-act="delUser" data-uid="${esc(u.id)}" style="color:var(--bad)">حذف</button>`:''}</td></tr>`}).join('')}</tbody></table></div>
+  return`<tr><td><b>${esc(u.name)}</b>${u.id===me.id?' <span class="pill in">أنت</span>':''}${isGuest(u)?' <span class="pill bad">الإدخال المفتوح</span>':''}</td><td dir="ltr" style="text-align:right">${esc(u.username)}</td><td>${adm?'<span class="pill in">وكيل</span>':'معلم'}</td><td class="wrapc small">${esc(cls)}</td><td class="wrapc small">${esc(pr)}</td><td>${u.active===false?'<span class="pill bad">موقوف</span>':'<span class="pill ok">نشط</span>'}</td>
+<td><button class="btn sm" data-act="editUser" data-uid="${esc(u.id)}">تعديل</button> ${isGuest(u)?'':`<button class="btn sm wa" data-act="waUser" data-uid="${esc(u.id)}" title="إرسال بيانات الدخول عبر واتساب">واتساب</button> <button class="btn sm" data-act="cardUser" data-uid="${esc(u.id)}" title="طباعة بطاقة الدخول">بطاقة</button> `}${u.id!==me.id?`<button class="btn sm" data-act="togUser" data-uid="${esc(u.id)}">${u.active===false?'تفعيل':'إيقاف'}</button> <button class="btn sm ghost" data-act="delUser" data-uid="${esc(u.id)}" style="color:var(--bad)">حذف</button>`:''}</td></tr>`}).join('')}</tbody></table></div>
 <p class="muted small">ملاحظة: الصلاحيات ووقت التحضير تُفرض داخل قاعدة البيانات نفسها، فلا يستطيع المعلم تجاوزها من المتصفح. اسم المستخدم لا يتغيّر بعد الإنشاء، وإيقاف الحساب يسري فوراً.</p>
 <p class="muted small">كلمات المرور لا تُخزَّن في حساب المصادقة؛ يحفظ النظام نسخة منها في هذا الجهاز لاستخدامها في رسالة الواتساب والبطاقة، ويمكن مزامنتها بين الأجهزة من الإعدادات.</p>`;
 }
 function userModal(uid){
   const u=uid?S.users.find(x=>x.id===uid):null;const p=(u&&u.perms)||{mark:true,editSaved:true,stats:true};const adm=u&&u.role==='admin';
-  const v=u?vaultGet(u.id):{};const hidePw=noPwOn()&&!adm;
+  const v=u?vaultGet(u.id):{};const guest=isGuest(u);const hidePw=guest||(noPwOn()&&!adm);
   openModal(u?'تعديل مستخدم':'إضافة معلم',`<label class="f"><span>الاسم</span><input type="text" id="u-name" value="${esc(u?u.name:'')}"></label>
 <label class="f"><span>${u?'اسم المستخدم (لا يمكن تغييره)':'اسم المستخدم (إنجليزي بدون مسافات، 3 أحرف على الأقل)'}</span><input type="text" id="u-un" dir="ltr" autocapitalize="off" autocomplete="off" value="${esc(u?u.username:'')}" ${u?'readonly':''}></label>
 <label class="f"><span>جوال المعلم (اختياري — يُستخدم لزر الواتساب)</span><input type="text" id="u-ph" dir="ltr" autocomplete="off" placeholder="05xxxxxxxx" value="${esc(v.phone||'')}"></label>
 <div id="u-pwbox" ${hidePw?'style="display:none"':''}>
 <label class="f"><span>${u?'كلمة مرور جديدة (اتركها فارغة بدون تغيير)':'كلمة المرور (6 أحرف على الأقل)'}</span><input type="password" id="u-pw" dir="ltr" autocomplete="new-password"></label>
 <div class="bar" style="margin-top:-4px"><label class="ck"><input type="checkbox" data-chg="showpw" data-for="u-pw"> إظهار كلمة المرور</label><button type="button" class="btn sm" data-act="genpw">توليد كلمة مرور</button></div></div>
-${noPwOn()?'<div class="note" style="margin-bottom:12px">الدخول بدون كلمة مرور مفعّل: يُنشأ حساب المعلم بكلمة مرور داخلية تلقائية ويدخل باسم المستخدم فقط.</div>':''}
+${guest?'<div class="note" style="margin-bottom:12px">هذا حساب «الإدخال المفتوح» المشترك الذي يُستخدم بزر «إدخال الغياب». يمكنك تعديل صلاحياته هنا، ويُفعَّل أو يوقَف من الإعدادات.</div>':noPwOn()?'<div class="note" style="margin-bottom:12px">الدخول بدون كلمة مرور مفعّل: يُنشأ حساب المعلم بكلمة مرور داخلية تلقائية ويدخل باسم المستخدم فقط.</div>':''}
 <label class="f"><span>الدور</span><select id="u-role" data-chg="urole"><option value="teacher" ${adm?'':'selected'}>معلم</option><option value="admin" ${adm?'selected':''}>وكيل (صلاحيات كاملة)</option></select></label>
 <div id="u-tbox" style="${adm?'display:none':''}">
 <div class="f"><span class="muted" style="display:block;margin-bottom:4px;font-size:14px">الفصول المسندة</span><div class="ckbox">${S.classes.map(c=>`<label class="ck"><input type="checkbox" name="u-cls" value="${esc(c.id)}" ${u&&(u.classIds||[]).includes(c.id)?'checked':''}> ${esc(c.name)}</label>`).join('')||'<span class="muted small">لا توجد فصول</span>'}</div></div>
@@ -1141,7 +1208,7 @@ ${noPwOn()?'<div class="note" style="margin-bottom:12px">الدخول بدون �
 <label class="ck"><input type="checkbox" id="u-act" ${u&&u.active===false?'':'checked'}> الحساب نشط</label>`,
   [{t:'إلغاء',close:true},{t:'حفظ',cls:'primary',fn:async()=>{
     const name=nrm(val('u-name')),un=nrm(val('u-un')).toLowerCase().replace(/\s/g,''),role=val('u-role'),active=chk('u-act');
-    const phone=nrm(val('u-ph')),auto=noPwOn()&&role!=='admin',pw=auto?autoPw(un):val('u-pw');
+    const phone=nrm(val('u-ph')),auto=noPwOn()&&role!=='admin',pw=guest?'':(auto?autoPw(un):val('u-pw'));
     if(!name||!un){toast('الاسم واسم المستخدم مطلوبان','bad');return false}
     if(!u){
       if(!UN_RE.test(un)){toast('اسم المستخدم: من 3 إلى 30 حرفاً إنجليزياً أو أرقاماً أو ( . _ - ) بدون مسافات','bad');return false}
@@ -1436,6 +1503,8 @@ function settingsHTML(){
 <div class="note" style="margin-bottom:12px">الوكيل يستطيع التحضير والتعديل في أي وقت. ويمكنك إعطاء معلم معيّن صلاحية «تجاوز وقت الإدخال» من تبويب المعلمون.</div>
 <button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div>
 <div class="card"><h3>دخول المعلمين وبطاقات الحساب</h3>
+<div class="optbar" style="margin-bottom:8px;border-color:#fca5a5"><label class="ck"><input type="checkbox" data-chg="sdopen" ${S.settings.openEntry?'checked':''}> <b>فتح إدخال الغياب للجميع (بدون اسم مستخدم أو كلمة مرور)</b></label></div>
+<p class="muted small" style="margin:0 0 14px">يظهر في صفحة الدخول زر أحمر «إدخال الغياب» يدخل به أي شخص كمعلم ويرى جميع الفصول، ويبقى اسم المستخدم وكلمة المرور تحته لدخول الوكيل. <b>تنبيه:</b> أي شخص يملك رابط الموقع يستطيع إدخال الغياب. (يُطبَّق فوراً عند التغيير)</p>
 <label class="f"><span>رابط الموقع (يظهر في رسالة الواتساب والبطاقة ورمز QR)</span><input type="text" id="sd-site" dir="ltr" data-inp="sdsite" value="${esc(d.siteUrl||'')}" placeholder="${esc(autoLink())}"></label>
 <div class="optbar" style="margin-bottom:8px"><label class="ck"><input type="checkbox" data-chg="sdnopw" ${S.settings.noPw?'checked':''}> <b>دخول المعلمين بدون كلمة مرور (اسم المستخدم فقط)</b></label></div>
 <p class="muted small" style="margin:0 0 14px">عند التفعيل تُضبط كلمة مرور داخلية تلقائية لكل معلم، ويكفيه كتابة اسم المستخدم في صفحة الدخول. <b>تنبيه:</b> أي شخص يعرف اسم المستخدم يستطيع الدخول لحساب المعلم، لذا استخدمه داخل المدرسة فقط. حساب الوكيل يبقى محمياً بكلمة مرور. (يُطبَّق فوراً عند التغيير)</p>
@@ -1563,7 +1632,7 @@ const ACT={
   addUser(){userModal()},editUser(t){userModal(t.dataset.uid)},togUser(t){toggleUser(t.dataset.uid)},delUser(t){deleteUser(t.dataset.uid)},
   waUser(t){waUser(t.dataset.uid)},cardUser(t){cardUser(t.dataset.uid)},printAllCards(){printAllCards()},
   showPw(){const b=$('#lp-box');if(b)b.style.display='';setNoPwFlag(false);const f=$('#lp');if(f)f.focus()},
-  install(){installApp()},refreshApp(){refreshApp()},
+  install(){installApp()},refreshApp(){refreshApp()},openEntry(){openEntryLogin()},
   stMode(t){S.st.mode=t.dataset.m;render()},
   pickStu(t){S.st.sid=t.dataset.sid;const i=S.idx.get(S.st.sid);S.st.q=i?i.n:'';render()},
   stExport:exportStats,
@@ -1588,6 +1657,7 @@ const CHG={
   urole(t){const b=$('#u-tbox');if(b)b.style.display=t.value==='admin'?'none':'';const p=$('#u-pwbox');if(p)p.style.display=(noPwOn()&&t.value!=='admin')?'none':''},
   allcls(t){setAllClassesForAll(t.checked)},
   sdnopw(t){toggleNoPw(t.checked)},
+  sdopen(t){toggleOpenEntry(t.checked)},
   sdsync(t){S.sd.syncPw=t.checked},
   tchrebuild(){tchBuild()},
   tchfile(t){
