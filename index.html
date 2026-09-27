@@ -49,6 +49,17 @@ body::before{content:'';position:fixed;top:0;left:0;right:0;height:env(safe-area
 .btn.danger{background:var(--bad);border-color:var(--bad);color:#fff}
 .btn.wa{background:#25d366;border-color:#25d366;color:#0b2e1c}.btn.wa:hover{background:#1eb958}
 .btn.openin{width:100%;background:#dc2626;border-color:#dc2626;color:#fff;font-size:20px;font-weight:800;padding:16px;border-radius:14px;box-shadow:0 6px 18px rgba(220,38,38,.28)}.btn.openin:hover{background:#b91c1c}
+.pergrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-bottom:8px}
+.percard{background:var(--sf);border:1px solid var(--ln);border-radius:14px;padding:16px 14px;text-align:right;cursor:pointer;box-shadow:var(--sh);display:flex;flex-direction:column;gap:4px;font:inherit;color:inherit}
+.percard:hover{border-color:var(--br)}.percard.done{border-color:var(--ok);background:var(--oks,var(--sf))}
+.percard b{font-size:17px}
+table.permtx th,table.permtx td{text-align:center;padding:6px}
+table.permtx td:first-child,table.permtx th:first-child{text-align:right;position:sticky;right:0;background:var(--sf)}
+.pcell{min-width:64px;border-radius:10px;border:1px solid var(--ln);background:var(--bg);padding:6px 4px;cursor:pointer;font:inherit;color:inherit;display:flex;flex-direction:column;align-items:center;gap:1px;width:100%}
+.pcell span{font-size:10px;color:var(--mut)}
+.pcell.ok{border-color:var(--ok);color:var(--ok)}
+.pcell.has{border-color:var(--bad);color:var(--bad)}
+.pcell.no{opacity:.6}
 .orsep{display:flex;align-items:center;gap:10px;color:var(--mut);font-size:13px;margin:18px 0 14px}.orsep::before,.orsep::after{content:'';flex:1;height:1px;background:var(--ln)}
 .optbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:var(--sf);border:1px solid var(--ln);border-radius:14px;padding:10px 14px;margin-bottom:12px;box-shadow:var(--sh)}
 .optbar label.ck{padding:0}
@@ -212,7 +223,7 @@ async function refreshApp(){
 }
 
 /* ================= الثوابت والأدوات ================= */
-const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false,openEntry:false};
+const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false,openEntry:false,periods:0,pStart:'06:30',pEnd:'14:00'};
 const EMAIL_DOMAIN='att.local';   /* نطاق داخلي وهمي لتحويل اسم المستخدم إلى بريد لـ Supabase Auth؛ لا تُرسل عليه رسائل. إن رفضه Supabase غيّره لنطاق حقيقي */
 const toEmail=un=>un+'@'+EMAIL_DOMAIN;
 const UN_RE=/^[a-z0-9._-]{3,30}$/;
@@ -264,7 +275,7 @@ function authMsg(e){
 }
 
 /* ================= الحالة ================= */
-const S={db:null,dl:null,fatal:false,fatalMsg:'',phase:'boot',needsSetup:false,school:'',off:0,busy:false,
+const S={db:null,dl:null,fatal:false,fatalMsg:'',phase:'boot',needsSetup:false,school:'',off:0,busy:false,per:null,
   settings:{...DEF},classes:[],users:[],rosters:{},idx:new Map(),monthAtt:{},subMo:null,dataSig:null,monthSig:null,gsig:null,
   meId:null,view:'home',att:null,stu:{cid:'all',q:'',sel:new Set(),lim:100},st:null,sd:null,imp:null};
 /* ساعة الخادم: نستخدم فرق التوقيت بين الخادم وجهاز المستخدم لتفادي التلاعب بساعة الجهاز */
@@ -374,7 +385,25 @@ async function loadAllData(){
   if(changed){S.dataSig=sig;S.settings=settings;S.classes=classes;S.rosters=rosters;S.users=pr;reindex()}
   return changed;
 }
-function decRec(r){const m={};(r.m||[]).forEach(x=>{const i=x.lastIndexOf(':');m[x.slice(0,i)]=x.slice(i+1)});return{by:r.by,bn:r.bn,at:r.at,r:r.r||[],m}}
+/* ---------- الحصص ---------- */
+const PERN=['','الأولى','الثانية','الثالثة','الرابعة','الخامسة','السادسة','السابعة','الثامنة'];
+const perCount=()=>Math.max(0,Math.min(8,parseInt(S.settings.periods,10)||0));
+const perOn=()=>perCount()>0;
+const perList=()=>Array.from({length:perCount()},(_,i)=>i+1);
+const perName=i=>'الحصة '+(PERN[i]||i);
+const dayRec=(cid,date)=>(S.monthAtt[cid]||{})[date]||null;
+/* سجل حصة معيّنة (per=0 أو غير محدد يعني التحضير اليومي) */
+function recOf(cid,date,per){
+  const d=dayRec(cid,date);if(!d)return null;
+  if(!per)return d.r?d:null;
+  return (d.p&&d.p[per])||null;
+}
+function decRec(r){
+  const m={};(r.m||[]).forEach(x=>{const i=x.lastIndexOf(':');m[x.slice(0,i)]=x.slice(i+1)});
+  const out={by:r.by,bn:r.bn,at:r.at,r:r.r||[],m};
+  if(r.p&&typeof r.p==='object'){out.p={};for(const [k,v] of Object.entries(r.p))if(v&&v.r)out.p[k]=decRec(v)}
+  return out;
+}
 async function subMonth(force=false){
   const mo=nowInfo().month;if(!force&&S.subMo===mo&&Object.keys(S.monthAtt).length)return false;S.subMo=mo;
   try{
@@ -418,8 +447,9 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 function resetSession(){
   stopLive();clearTimeout(refT);
   Object.assign(S,{meId:null,users:[],classes:[],rosters:{},monthAtt:{},subMo:null,dataSig:null,monthSig:null,gsig:null,settings:{...DEF},
-    view:'home',att:null,st:null,sd:null,imp:null,stu:{cid:'all',q:'',sel:new Set(),lim:100},phase:'auth'});
+    view:'home',att:null,st:null,sd:null,imp:null,per:null,stu:{cid:'all',q:'',sel:new Set(),lim:100},phase:'auth'});
   reindex();closeModal();render();
+  if(sb)probeOpenEntry().then(()=>{if(S.phase==='auth')render()});
 }
 async function startSession(uid){
   const {data,error}=await sb.from('profiles').select('*').eq('id',uid).maybeSingle();
@@ -460,14 +490,15 @@ async function init(){
 /* ================= وقت إدخال الغياب ================= */
 function timeGate(){
   const n=nowInfo(),s=S.settings;
+  const st=perOn()?(s.pStart||s.start):s.start,en=perOn()?(s.pEnd||s.end):s.end;
   if(s.extendUntil>n.ts)return{open:true,msg:`الإدخال ممدَّد حتى الساعة ${fmtClock(s.extendUntil)}`,ext:true};
   if(s.mode==='open')return{open:true,msg:'الإدخال مفتوح'};
   if(s.mode==='closed')return{open:false,msg:'إدخال الغياب مغلق حالياً من قِبل الإدارة'};
   if(!(s.days||[]).includes(n.dow))return{open:false,msg:'اليوم خارج أيام الدوام المحددة'};
-  const a=hm(s.start),b=hm(s.end);
-  if(n.min<a)return{open:false,msg:`يفتح إدخال الغياب الساعة ${s.start}`};
-  if(n.min>=b)return{open:false,msg:`انتهى وقت إدخال الغياب (${s.end})`};
-  return{open:true,msg:`الإدخال مفتوح حتى الساعة ${s.end}`};
+  const a=hm(st),b=hm(en);
+  if(n.min<a)return{open:false,msg:`يفتح إدخال الغياب الساعة ${st}`};
+  if(n.min>=b)return{open:false,msg:`انتهى وقت إدخال الغياب (${en})`};
+  return{open:true,msg:`الإدخال مفتوح حتى الساعة ${en}`};
 }
 function entryStatus(u,date,hasRec){
   const n=nowInfo();
@@ -509,7 +540,8 @@ ${op?`<button class="btn openin" id="openin" data-act="openEntry">إدخال ا�
 <div id="lp-box" ${np?'style="display:none"':''}><label class="f"><span>كلمة المرور</span><input type="password" id="lp" autocomplete="current-password" data-enter="login"></label></div>
 ${np?`<p class="muted small" style="margin:-4px 0 12px">الدخول للمعلمين باسم المستخدم فقط. <button class="btn sm ghost" data-act="showPw" style="color:var(--br)">دخول بكلمة المرور (للوكيل)</button></p>`:''}
 <button class="btn ${op?'':'primary'}" style="width:100%" data-act="login">${op?'دخول الوكيل':'دخول'}</button>
-${canInstall()?'<button class="btn" style="width:100%;margin-top:10px" data-act="install">📲 تثبيت التطبيق على الجهاز</button>':''}</div></div>`}
+${canInstall()?'<button class="btn" style="width:100%;margin-top:10px" data-act="install">📲 تثبيت التطبيق على الجهاز</button>':''}
+<p class="muted" style="text-align:center;font-size:11px;margin:14px 0 0" dir="ltr">v${APP_VER}</p></div></div>`}
 function setupHTML(){return`<div class="auth"><div class="card"><img class="applogo" src="${ICON_URI}" alt="" width="64" height="64"><h1 style="text-align:center">إعداد النظام لأول مرة</h1><p class="muted">سيتم إنشاء حساب الوكيل (المدير). بعدها تضيف الفصول والطلاب والمعلمين من لوحة التحكم.</p>
 <label class="f"><span>اسم المدرسة</span><input type="text" id="su-school"></label>
 <label class="f"><span>اسم الوكيل</span><input type="text" id="su-name"></label>
@@ -553,8 +585,8 @@ function openModal(title,body,buttons,opts){
 function askConfirm(title,msg,yes,danger){return new Promise(res=>{openModal(title,`<p style="margin:0">${msg}</p>`,[{t:'إلغاء',close:true,fn:()=>res(false)},{t:yes||'تأكيد',cls:danger===false?'primary':'danger',fn:()=>{res(true)}}],{nofocus:true})})}
 
 /* ================= الصفحة الرئيسية للمعلم ================= */
-function classCardStatus(cid){
-  const n=nowInfo();const rec=(S.monthAtt[cid]||{})[n.date];
+function classCardStatus(cid,per){
+  const n=nowInfo();const rec=recOf(cid,n.date,per||0);
   if(!rec)return{done:false,html:'<span class="pill wn">لم يتم التحضير بعد</span>'};
   const a=Object.values(rec.m).filter(v=>v==='a').length;
   return{done:true,rec,html:`<span class="pill ok">تم التحضير ${fmtClock(rec.at)}</span> <span class="pill ${a?'bad':''}">غياب ${a}</span>`};
@@ -565,12 +597,45 @@ function teacherHome(me){
   if(!p.mark)ban=`<div class="banner bad">لا تملك صلاحية التحضير. تواصل مع الوكيل.</div>`;
   else if(p.bypassTime)ban=`<div class="banner in">لديك صلاحية الإدخال في أي وقت</div>`;
   else ban=`<div class="banner ${g.open?'ok':'bad'}"><span>${g.open?'●':'■'} ${esc(g.msg)}</span></div>`;
-  return`<h2 style="margin-bottom:2px">أهلاً ${esc(me.name)}</h2><p class="muted" style="margin:0 0 14px">${longDate(n.date)} — ${hijri(n.date)}</p>${ban}
-<h3 style="margin-bottom:10px">اختر الفصل</h3>${cls.length?`<div class="classes">${cls.map(c=>{const st=classCardStatus(c.id);return`<button class="ccard" data-act="openClass" data-cid="${esc(c.id)}"><b>${esc(c.name)}</b><span class="muted small">${(S.rosters[c.id]||[]).length} طالب</span><div>${st.html}</div></button>`}).join('')}</div>`:`<div class="card muted">لم يتم إسناد أي فصل لك بعد. تواصل مع الوكيل.</div>`}`;
+  const head=`<h2 style="margin-bottom:2px">أهلاً ${esc(me.name)}</h2><p class="muted" style="margin:0 0 14px">${longDate(n.date)} — ${hijri(n.date)}</p>${ban}`;
+  /* الخطوة 1: اختيار الحصة */
+  if(perOn()&&!S.per){
+    return head+`<h3 style="margin-bottom:10px">اختر الحصة</h3><div class="pergrid">${perList().map(i=>{
+      const done=cls.filter(c=>recOf(c.id,n.date,i)).length;
+      return`<button class="percard ${done&&done===cls.length?'done':''}" data-act="pickPer" data-p="${i}"><b>${esc(perName(i))}</b><span class="muted small">${done}/${cls.length} فصل تم تحضيره</span></button>`;
+    }).join('')}</div>`;
+  }
+  /* الخطوة 2: اختيار الفصل */
+  const per=perOn()?S.per:0;
+  const bar=perOn()?`<div class="bar"><button class="btn" data-act="pickPer" data-p="0">→ تغيير الحصة</button><span class="pill in">${esc(perName(per))}</span></div>`:'';
+  return head+bar+`<h3 style="margin-bottom:10px">اختر الفصل</h3>${cls.length?`<div class="classes">${cls.map(c=>{const st=classCardStatus(c.id,per);return`<button class="ccard" data-act="openClass" data-cid="${esc(c.id)}"><b>${esc(c.name)}</b><span class="muted small">${(S.rosters[c.id]||[]).length} طالب</span><div>${st.html}</div></button>`}).join('')}</div>`:`<div class="card muted">لم يتم إسناد أي فصل لك بعد. تواصل مع الوكيل.</div>`}`;
 }
 
 /* ================= الصفحة الرئيسية للوكيل ================= */
+function adminPerHome(){
+  const n=nowInfo(),g=timeGate(),ps=perList();
+  const cells=S.classes.map(c=>({c,total:(S.rosters[c.id]||[]).length,per:ps.map(i=>{
+    const rec=recOf(c.id,n.date,i);let a=0,l=0,e=0;
+    if(rec)Object.values(rec.m).forEach(v=>{if(v==='a')a++;else if(v==='l')l++;else if(v==='e')e++});
+    return{i,rec,a,l,e};
+  })}));
+  const need=S.classes.length*ps.length,done=cells.reduce((s,r)=>s+r.per.filter(x=>x.rec).length,0);
+  const A=cells.reduce((s,r)=>s+r.per.reduce((q,x)=>q+x.a,0),0);
+  const E=cells.reduce((s,r)=>s+r.per.reduce((q,x)=>q+x.e,0),0);
+  const L=cells.reduce((s,r)=>s+r.per.reduce((q,x)=>q+x.l,0),0);
+  const absStu=new Set();cells.forEach(r=>r.per.forEach(x=>{if(x.rec)Object.entries(x.rec.m).forEach(([sid,v])=>{if(v==='a'||v==='e')absStu.add(sid)})}));
+  const modeTxt={auto:'تلقائي حسب الوقت',open:'مفتوح دائماً',closed:'مغلق'}[S.settings.mode];
+  return`<h2 style="margin-bottom:2px">لوحة اليوم — حسب الحصص</h2><p class="muted" style="margin:0 0 14px">${longDate(n.date)} — ${hijri(n.date)}</p>
+<div class="banner ${g.open?'ok':'bad'}"><span>${g.open?'●':'■'} وقت الإدخال للمعلمين: ${esc(g.msg)} <span class="small" style="opacity:.8">(الوضع: ${modeTxt})</span></span><span class="sp"></span>
+<button class="btn sm" data-act="extend" data-min="30">فتح 30 دقيقة</button>${S.settings.extendUntil>n.ts?`<button class="btn sm" data-act="extend" data-min="0">إلغاء التمديد</button>`:''}<button class="btn sm" data-act="nav" data-v="settings">إعدادات الوقت</button></div>
+<div class="kpis"><div class="kpi"><b>${done}/${need}</b><span>حصص تم تحضيرها</span></div><div class="kpi ${need-done?'wn':'ok'}"><b>${need-done}</b><span>حصص لم تُحضَّر</span></div><div class="kpi bad"><b>${A}</b><span>غياب (كل الحصص)</span></div><div class="kpi in"><b>${E}</b><span>بعذر</span></div><div class="kpi wn"><b>${L}</b><span>تأخر</span></div><div class="kpi bad"><b>${absStu.size}</b><span>طلاب غابوا في حصة أو أكثر</span></div></div>
+<div class="card tw"><table class="permtx"><thead><tr><th>الفصل</th>${ps.map(i=>`<th>${esc(PERN[i]||i)}</th>`).join('')}</tr></thead><tbody>
+${cells.map(r=>`<tr><td><b>${esc(r.c.name)}</b><span class="muted small"> (${r.total})</span></td>${r.per.map(x=>`<td><button class="pcell ${x.rec?(x.a?'has':'ok'):'no'}" data-act="openClass" data-cid="${esc(r.c.id)}" data-p="${x.i}" title="${esc(r.c.name)} — ${esc(perName(x.i))}">${x.rec?(x.a||x.e?`<b>${x.a+x.e}</b><span>غياب</span>`:'<b>✓</b><span>حاضرون</span>'):'<b>—</b><span>لم يتم</span>'}</button></td>`).join('')}</tr>`).join('')||`<tr><td colspan="${ps.length+1}" class="muted">لا توجد فصول بعد. ابدأ من تبويب «الفصول».</td></tr>`}
+</tbody></table></div>
+<p class="muted small">الرقم داخل الخانة = عدد الغائبين (شامل الغياب بعذر) في تلك الحصة. اضغط أي خانة لعرض التحضير أو تعديله.</p>`;
+}
 function adminHome(){
+  if(perOn())return adminPerHome();
   const n=nowInfo(),g=timeGate();
   const rows=S.classes.map(c=>{const rec=(S.monthAtt[c.id]||{})[n.date];const total=(S.rosters[c.id]||[]).length;let a=0,l=0,e=0;if(rec)Object.values(rec.m).forEach(v=>{if(v==='a')a++;else if(v==='l')l++;else if(v==='e')e++});return{c,rec,total,a,l,e}});
   const students=rows.reduce((s,r)=>s+r.total,0),done=rows.filter(r=>r.rec),taken=done.reduce((s,r)=>s+r.rec.r.length,0);
@@ -608,6 +673,7 @@ function attendHTML(me){
   if(!a){return`<div class="card muted">${S.classes.length?'اختر فصلاً للبدء.':'أضف فصولاً أولاً من تبويب «الفصول».'}</div>`}
   const cls=myClasses(me),canDate=admin||(me.perms&&me.perms.pastDates);
   const head=`<div class="bar">${admin?'':`<button class="btn" data-act="nav" data-v="home">→ الفصول</button>`}
+${perOn()?`<select id="aper" data-chg="aper" aria-label="الحصة">${perList().map(i=>`<option value="${i}" ${i===a.per?'selected':''}>${esc(perName(i))}</option>`).join('')}</select>`:''}
 <select id="aclass" data-chg="aclass" aria-label="الفصل">${cls.map(c=>`<option value="${esc(c.id)}" ${c.id===a.cid?'selected':''}>${esc(c.name)}</option>`).join('')}</select>
 ${canDate?`<input type="date" id="adate" data-chg="adate" value="${esc(a.date)}" max="${n.date}" aria-label="التاريخ">`:`<span class="pill in">${longDate(a.date)}</span>`}</div>`;
   if(a.loading)return head+`<div class="center"><div class="spin"></div></div>`;
@@ -623,13 +689,17 @@ function paintAtt(){
   const st=attStatus();const l=$('#att-list'),s=$('#att-sum'),b=$('#att-bar');
   if(l)l.innerHTML=attListHTML(!st.ok);if(s)s.innerHTML=attSumHTML();if(b)b.innerHTML=attBarHTML();
 }
-async function openAttend(cid,date){
+async function openAttend(cid,date,per){
   const tok=Math.random();
-  S.att={cid,date,draft:{},dirty:false,q:'',loading:true,rec:null,tok};S.view='attend';render();
+  if(per===undefined||per===null)per=perOn()?(S.per||1):0;
+  if(!perOn())per=0;
+  if(per)S.per=per;
+  S.att={cid,date,per,draft:{},dirty:false,q:'',loading:true,rec:null,tok};S.view='attend';render();
   try{
     const snap=await S.db.doc(`att/${cid}_${date.slice(0,7)}`).get();
     if(!S.att||S.att.tok!==tok)return;
-    const d=snap.exists?(snap.data().days||{})[date]:null;
+    const day=snap.exists?(snap.data().days||{})[date]:null;
+    const d=day?(per?((day.p||{})[per]||null):(day.r?day:null)):null;
     if(d){S.att.rec=decRec(d);S.att.draft={...S.att.rec.m}}
   }catch(e){toast(errMsg(e),'bad')}
   if(S.att&&S.att.tok===tok){S.att.loading=false;render()}
@@ -643,10 +713,16 @@ async function saveAttendance(){
   a.saving=true;paintAtt();
   try{
     /* الحفظ عبر دالة الخادم: تفحص الصلاحيات والوقت وتكتب اليوم المحدد فقط دون المساس ببقية الأيام */
-    const {data,error}=await sb.rpc('save_day',{p_class:a.cid,p_date:a.date,p_rec:rec});
+    const {data,error}=a.per
+      ?await sb.rpc('save_period',{p_class:a.cid,p_date:a.date,p_period:a.per,p_rec:rec})
+      :await sb.rpc('save_day',{p_class:a.cid,p_date:a.date,p_rec:rec});
     if(error)throw dbErr(error);
     a.rec=decRec(data);a.dirty=false;
-    if(a.date.slice(0,7)===S.subMo){(S.monthAtt[a.cid]=S.monthAtt[a.cid]||{})[a.date]=a.rec}
+    if(a.date.slice(0,7)===S.subMo){
+      const mo=(S.monthAtt[a.cid]=S.monthAtt[a.cid]||{});
+      if(a.per){const d=mo[a.date]=mo[a.date]||{by:'',bn:'',at:0,r:[],m:{}};d.p=d.p||{};d.p[a.per]=a.rec}
+      else{const old=mo[a.date];mo[a.date]=old&&old.p?{...a.rec,p:old.p}:a.rec}
+    }
     toast('تم حفظ التحضير بنجاح','ok');scheduleRefresh(300);
   }catch(e){toast(errMsg(e),'bad')}
   a.saving=false;paintAtt();
@@ -852,6 +928,24 @@ async function probeOpenEntry(){
     S.openEntry=!!data;setOpenFlag(!!data);
   }catch(e){}
 }
+const APP_VER='2026.09.21-c';
+const openLink=()=>{try{const u=new URL(siteLink());u.searchParams.set('open','1');return u.toString()}catch(e){return siteLink()+'?open=1'}};
+/* فحص حالة الإدخال المفتوح في الإعدادات: يوضح سبب عدم ظهور الزر الأحمر */
+async function checkOpenEntry(){
+  if(!$('#oe-stat'))return;
+  let fn='missing',val=false;
+  try{const {data,error}=await sb.rpc('open_entry_status');if(!error){fn='ok';val=!!data}}catch(e){}
+  const on=!!S.settings.openEntry,g=S.users.find(isGuest);
+  const row=(ok,t)=>`<div style="margin:3px 0">${ok?'✅':'⚠️'} ${t}</div>`;
+  let h='';
+  h+=row(on,on?'الخيار مفعّل في الإعدادات':'الخيار غير مفعّل — فعّل المربع أعلاه');
+  if(on)h+=row(!!g&&g.active!==false,!g?'حساب «إدخال الغياب» غير موجود — ألغِ التفعيل ثم فعّله مرة أخرى':g.active===false?'حساب «إدخال الغياب» موقوف — ألغِ التفعيل ثم فعّله مرة أخرى':'حساب «إدخال الغياب» جاهز');
+  h+=fn==='ok'?row(!on||val,val?'دالة open-entry.sql مثبتة والزر يظهر لكل الأجهزة':'دالة open-entry.sql مثبتة')
+             :row(false,'ملف <span dir="ltr">open-entry.sql</span> لم يُشغَّل في Supabase، لذلك <b>لن يظهر الزر الأحمر في الأجهزة الجديدة</b>. شغّله من SQL Editor، أو شارك الرابط المباشر أدناه.');
+  if(on)h+=`<div class="bar" style="margin:10px 0 0"><input type="text" readonly dir="ltr" value="${esc(openLink())}" style="flex:1;min-width:200px"><button class="btn sm" data-act="copyOpenLink">نسخ الرابط المباشر</button></div>
+<p class="muted small" style="margin:6px 0 0">الرابط المباشر يُظهر الزر الأحمر حتى بدون ملف SQL.</p>`;
+  S.oeHtml=h;const el=$('#oe-stat');if(el)el.innerHTML=h;
+}
 async function openEntryLogin(){
   if(S.busy)return;S.busy=true;
   const b=$('#openin');if(b){b.disabled=true;b.textContent='جاري الدخول…'}
@@ -895,7 +989,7 @@ async function toggleOpenEntry(on){
       toast('تم إيقاف الإدخال المفتوح','ok');
     }
   }catch(e){toast(errMsg(e),'bad')}
-  S.sd=null;S.dataSig=null;scheduleRefresh(50);render();
+  S.sd=null;S.dataSig=null;scheduleRefresh(50);render();setTimeout(checkOpenEntry,0);
 }
 const DEF_WA=`مرحباً أ. {name} 👋
 تم إنشاء حسابك في نظام تحضير الطلاب بـ {school}.
@@ -1398,7 +1492,7 @@ function presetRange(p){
 }
 function initStats(){
   if(S.st)return;const[f,t]=presetRange('month');
-  S.st={mode:'class',cid:null,sid:null,preset:'month',from:f,to:t,recs:null,loading:false,sort:'name',q:''};
+  S.st={mode:'class',cid:null,sid:null,preset:'month',from:f,to:t,recs:null,loading:false,sort:'name',q:'',per:'all'};
   fetchStats();
 }
 async function fetchStats(){
@@ -1408,12 +1502,20 @@ async function fetchStats(){
     const me=curUser(),allowed=new Set(myClasses(me).map(c=>c.id));
     const snap=await S.db.collection('att').where('mo','>=',st.from.slice(0,7)).where('mo','<=',st.to.slice(0,7)).get();
     const out=[];
-    snap.docs.forEach(d=>{const x=d.data();if(!isAdmin(me)&&!allowed.has(x.c))return;for(const[date,r] of Object.entries(x.days||{})){if(date>=st.from&&date<=st.to)out.push({c:x.c,date,...decRec(r)})}});
+    snap.docs.forEach(d=>{const x=d.data();if(!isAdmin(me)&&!allowed.has(x.c))return;
+      for(const[date,r] of Object.entries(x.days||{})){
+        if(date<st.from||date>st.to)continue;
+        if(r&&r.r){const dec=decRec(r);delete dec.p;out.push({c:x.c,date,per:0,...dec})}
+        if(r&&r.p)for(const[k,v] of Object.entries(r.p)){if(v&&v.r)out.push({c:x.c,date,per:+k,...decRec(v)})}
+      }});
     st.recs=out;
   }catch(e){toast(errMsg(e),'bad');st.recs=[]}
   st.loading=false;render();
 }
 const nameOf=sid=>{const i=S.idx.get(sid);return i?i.n:'طالب محذوف'};
+/* سجلات الإحصائيات بعد تطبيق مرشّح الحصة */
+function stRecs(){const st=S.st;if(!st.recs)return[];const f=st.per;return(!f||f==='all')?st.recs:st.recs.filter(r=>(r.per||0)===+f)}
+const perLabel=p=>p?perName(p):'اليومي';
 function tally(recs){const m=new Map();for(const r of recs)for(const sid of r.r){let s=m.get(sid);if(!s){s={d:0,a:0,l:0,e:0};m.set(sid,s)}s.d++;const c=r.m[sid];if(c==='a')s.a++;else if(c==='l')s.l++;else if(c==='e')s.e++}return m}
 const pct=s=>s.d?Math.round((s.d-s.a-s.e)/s.d*1000)/10:null;
 const pbar=p=>p===null?'—':`<div style="display:flex;align-items:center;gap:8px"><div class="pbar ${p<85?'bad':p<95?'wn':''}" style="flex:1"><i style="width:${p}%"></i></div><b>${p}%</b></div>`;
@@ -1427,6 +1529,7 @@ function statsHTML(me){
 <div class="card"><div class="bar" style="margin:0"><label class="f" style="margin:0"><span>الفترة</span><select id="st-pre" data-chg="stpre">${presets.map(p=>`<option value="${p[0]}" ${st.preset===p[0]?'selected':''}>${p[1]}</option>`).join('')}</select></label>
 <label class="f" style="margin:0"><span>من</span><input type="date" id="st-from" data-chg="stfrom" value="${esc(st.from)}"></label><label class="f" style="margin:0"><span>إلى</span><input type="date" id="st-to" data-chg="stto" value="${esc(st.to)}"></label>
 ${st.mode==='class'?`<label class="f" style="margin:0"><span>الفصل</span><select id="st-cls" data-chg="stcls">${cls.map(c=>`<option value="${esc(c.id)}" ${c.id===st.cid?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>`:''}
+${perOn()?`<label class="f" style="margin:0"><span>الحصة</span><select id="st-per" data-chg="stper"><option value="all" ${st.per==='all'?'selected':''}>كل الحصص</option>${perList().map(i=>`<option value="${i}" ${String(st.per)===String(i)?'selected':''}>${esc(perName(i))}</option>`).join('')}<option value="0" ${String(st.per)==='0'?'selected':''}>التحضير اليومي</option></select></label>`:''}
 <span class="sp"></span>${S.dl&&st.recs?`<button class="btn" data-act="stExport">تصدير Excel</button>`:''}</div>
 <p class="muted small" style="margin:10px 0 0">نسبة الحضور = (الأيام المسجلة − الغياب − الغياب بعذر) ÷ الأيام المسجلة. التأخر لا يُحتسب غياباً.</p></div>`;
   if(st.loading||!st.recs)return html+`<div class="center"><div class="spin"></div></div>`;
@@ -1434,7 +1537,7 @@ ${st.mode==='class'?`<label class="f" style="margin:0"><span>الفصل</span><s
   return html;
 }
 function classStatRows(cid){
-  const recs=S.st.recs.filter(r=>r.c===cid),t=tally(recs);
+  const recs=stRecs().filter(r=>r.c===cid),t=tally(recs);
   const ids=new Set((S.rosters[cid]||[]).map(s=>s.id));t.forEach((_,k)=>ids.add(k));
   const rows=[...ids].map(id=>{const s=t.get(id)||{d:0,a:0,l:0,e:0};const cur=(S.rosters[cid]||[]).some(x=>x.id===id);return{id,n:nameOf(id),cur,...s,p:pct(s)}});
   const sort=S.st.sort;rows.sort(sort==='abs'?(a,b)=>(b.a+b.e)-(a.a+a.e)||cmpAr(a.n,b.n):sort==='pct'?(a,b)=>(a.p??101)-(b.p??101):(a,b)=>cmpAr(a.n,b.n));
@@ -1443,27 +1546,27 @@ function classStatRows(cid){
 function statClassHTML(){
   const st=S.st;if(!st.cid)return`<div class="card muted">لا توجد فصول متاحة.</div>`;
   const{recs,rows}=classStatRows(st.cid);
-  const days=new Map();recs.forEach(r=>days.set(r.date,r));
+  const days=new Map();recs.forEach(r=>days.set(r.date+'#'+(r.per||0),r));
   const tot=rows.reduce((s,r)=>({d:s.d+r.d,a:s.a+r.a,l:s.l+r.l,e:s.e+r.e}),{d:0,a:0,l:0,e:0});const avg=pct(tot);
-  return`<div class="kpis"><div class="kpi"><b>${days.size}</b><span>أيام تم تحضيرها</span></div><div class="kpi ${avg!==null&&avg<90?'bad':'ok'}"><b>${avg===null?'—':avg+'%'}</b><span>متوسط الحضور</span></div><div class="kpi bad"><b>${tot.a}</b><span>غياب</span></div><div class="kpi in"><b>${tot.e}</b><span>غياب بعذر</span></div><div class="kpi wn"><b>${tot.l}</b><span>تأخر</span></div></div>
+  return`<div class="kpis"><div class="kpi"><b>${days.size}</b><span>${perOn()?'حصص تم تحضيرها':'أيام تم تحضيرها'}</span></div><div class="kpi ${avg!==null&&avg<90?'bad':'ok'}"><b>${avg===null?'—':avg+'%'}</b><span>متوسط الحضور</span></div><div class="kpi bad"><b>${tot.a}</b><span>غياب</span></div><div class="kpi in"><b>${tot.e}</b><span>غياب بعذر</span></div><div class="kpi wn"><b>${tot.l}</b><span>تأخر</span></div></div>
 <div class="bar"><span class="muted small">ترتيب حسب:</span><select id="st-sort" data-chg="stsort"><option value="name" ${st.sort==='name'?'selected':''}>الاسم</option><option value="abs" ${st.sort==='abs'?'selected':''}>الأكثر غياباً</option><option value="pct" ${st.sort==='pct'?'selected':''}>الأقل حضوراً</option></select></div>
-<div class="card tw"><table><thead><tr><th>#</th><th>الطالب</th><th>أيام مسجلة</th><th>غياب</th><th>بعذر</th><th>تأخر</th><th style="min-width:160px">نسبة الحضور</th></tr></thead><tbody>
+<div class="card tw"><table><thead><tr><th>#</th><th>الطالب</th><th>${perOn()?'سجلات':'أيام مسجلة'}</th><th>غياب</th><th>بعذر</th><th>تأخر</th><th style="min-width:160px">نسبة الحضور</th></tr></thead><tbody>
 ${rows.map((r,i)=>`<tr><td class="muted">${i+1}</td><td><b>${esc(r.n)}</b>${r.cur?'':' <span class="pill">خارج الفصل</span>'}</td><td>${r.d}</td><td>${r.a?`<span class="pill bad">${r.a}</span>`:0}</td><td>${r.e?`<span class="pill in">${r.e}</span>`:0}</td><td>${r.l?`<span class="pill wn">${r.l}</span>`:0}</td><td>${pbar(r.p)}</td></tr>`).join('')||`<tr><td colspan="7" class="muted">لا توجد بيانات.</td></tr>`}</tbody></table></div>
-<h3 style="margin:16px 0 8px">التفاصيل اليومية</h3><div class="card tw"><table><thead><tr><th>التاريخ</th><th>بواسطة</th><th>الوقت</th><th>غياب</th><th>بعذر</th><th>تأخر</th></tr></thead><tbody>
-${[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)).map(r=>{const v=Object.values(r.m);return`<tr><td>${fmtDay(r.date,{weekday:'long',day:'numeric',month:'short'})}</td><td>${esc(r.bn||'')}</td><td>${fmtClock(r.at)}</td><td>${v.filter(x=>x==='a').length}</td><td>${v.filter(x=>x==='e').length}</td><td>${v.filter(x=>x==='l').length}</td></tr>`}).join('')||`<tr><td colspan="6" class="muted">لا توجد أيام مسجلة في هذه الفترة.</td></tr>`}</tbody></table></div>`;
+<h3 style="margin:16px 0 8px">التفاصيل ${perOn()?'حسب الحصص':'اليومية'}</h3><div class="card tw"><table><thead><tr><th>التاريخ</th>${perOn()?'<th>الحصة</th>':''}<th>بواسطة</th><th>الوقت</th><th>غياب</th><th>بعذر</th><th>تأخر</th></tr></thead><tbody>
+${[...days.values()].sort((a,b)=>b.date.localeCompare(a.date)||(a.per||0)-(b.per||0)).map(r=>{const v=Object.values(r.m);return`<tr><td>${fmtDay(r.date,{weekday:'long',day:'numeric',month:'short'})}</td>${perOn()?`<td>${esc(perLabel(r.per))}</td>`:''}<td>${esc(r.bn||'')}</td><td>${fmtClock(r.at)}</td><td>${v.filter(x=>x==='a').length}</td><td>${v.filter(x=>x==='e').length}</td><td>${v.filter(x=>x==='l').length}</td></tr>`}).join('')||`<tr><td colspan="${perOn()?7:6}" class="muted">لا توجد سجلات في هذه الفترة.</td></tr>`}</tbody></table></div>`;
 }
 function statStudentHTML(cls){
   const st=S.st;let head=`<div class="card"><label class="f" style="margin:0"><span>ابحث عن الطالب بالاسم أو الرقم</span><input type="search" id="sq2" data-inp="sq2" value="${esc(st.q)}" placeholder="اكتب حرفين على الأقل"></label><div id="sres">${stuResultsHTML(cls)}</div></div>`;
   if(!st.sid||!S.idx.has(st.sid)&&!st.sname)return head+`<div class="card muted">اختر طالباً لعرض إحصائياته.</div>`;
-  const recs=st.recs.filter(r=>r.r.includes(st.sid)),s=tally(recs).get(st.sid)||{d:0,a:0,l:0,e:0},p=pct(s);
+  const recs=stRecs().filter(r=>r.r.includes(st.sid)),s=tally(recs).get(st.sid)||{d:0,a:0,l:0,e:0},p=pct(s);
   const info=S.idx.get(st.sid);
   const abs=recs.filter(r=>r.m[st.sid]).sort((a,b)=>b.date.localeCompare(a.date));
   const months=new Map();recs.forEach(r=>{const k=r.date.slice(0,7);const m=months.get(k)||{d:0,a:0,l:0,e:0};m.d++;const c=r.m[st.sid];if(c==='a')m.a++;else if(c==='l')m.l++;else if(c==='e')m.e++;months.set(k,m)});
   return head+`<div class="card"><h3>${esc(info?info.n:'طالب')} <span class="muted small">— ${esc(info?info.cn:'')}</span></h3>
-<div class="kpis" style="margin:0"><div class="kpi"><b>${s.d}</b><span>أيام مسجلة</span></div><div class="kpi ${p!==null&&p<90?'bad':'ok'}"><b>${p===null?'—':p+'%'}</b><span>نسبة الحضور</span></div><div class="kpi bad"><b>${s.a}</b><span>غياب</span></div><div class="kpi in"><b>${s.e}</b><span>بعذر</span></div><div class="kpi wn"><b>${s.l}</b><span>تأخر</span></div></div></div>
-<h3 style="margin:8px 0">أيام الغياب والتأخر</h3><div class="card tw"><table><thead><tr><th>التاريخ</th><th>الحالة</th><th>الفصل</th><th>سجّلها</th></tr></thead><tbody>
-${abs.map(r=>{const c=r.m[st.sid];return`<tr><td>${fmtDay(r.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</td><td><span class="pill ${CODES[c].c}">${CODES[c].t}</span></td><td>${esc(cname(r.c))}</td><td>${esc(r.bn||'')}</td></tr>`}).join('')||`<tr><td colspan="4" class="muted">لا يوجد غياب أو تأخر في هذه الفترة 👍</td></tr>`}</tbody></table></div>
-${months.size>1?`<h3 style="margin:8px 0">حسب الشهر</h3><div class="card tw"><table><thead><tr><th>الشهر</th><th>أيام</th><th>غياب</th><th>بعذر</th><th>تأخر</th><th style="min-width:150px">الحضور</th></tr></thead><tbody>${[...months.entries()].sort().map(([k,m])=>`<tr><td>${fmtDay(k+'-01',{month:'long',year:'numeric'})}</td><td>${m.d}</td><td>${m.a}</td><td>${m.e}</td><td>${m.l}</td><td>${pbar(pct(m))}</td></tr>`).join('')}</tbody></table></div>`:''}`;
+<div class="kpis" style="margin:0"><div class="kpi"><b>${s.d}</b><span>${perOn()?'سجلات':'أيام مسجلة'}</span></div><div class="kpi ${p!==null&&p<90?'bad':'ok'}"><b>${p===null?'—':p+'%'}</b><span>نسبة الحضور</span></div><div class="kpi bad"><b>${s.a}</b><span>غياب</span></div><div class="kpi in"><b>${s.e}</b><span>بعذر</span></div><div class="kpi wn"><b>${s.l}</b><span>تأخر</span></div></div></div>
+<h3 style="margin:8px 0">${perOn()?'سجلات الغياب والتأخر حسب الحصة':'أيام الغياب والتأخر'}</h3><div class="card tw"><table><thead><tr><th>التاريخ</th>${perOn()?'<th>الحصة</th>':''}<th>الحالة</th><th>الفصل</th><th>سجّلها</th></tr></thead><tbody>
+${abs.map(r=>{const c=r.m[st.sid];return`<tr><td>${fmtDay(r.date,{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</td>${perOn()?`<td>${esc(perLabel(r.per))}</td>`:''}<td><span class="pill ${CODES[c].c}">${CODES[c].t}</span></td><td>${esc(cname(r.c))}</td><td>${esc(r.bn||'')}</td></tr>`}).join('')||`<tr><td colspan="${perOn()?5:4}" class="muted">لا يوجد غياب أو تأخر في هذه الفترة 👍</td></tr>`}</tbody></table></div>
+${months.size>1?`<h3 style="margin:8px 0">حسب الشهر</h3><div class="card tw"><table><thead><tr><th>الشهر</th><th>${perOn()?'سجلات':'أيام'}</th><th>غياب</th><th>بعذر</th><th>تأخر</th><th style="min-width:150px">الحضور</th></tr></thead><tbody>${[...months.entries()].sort().map(([k,m])=>`<tr><td>${fmtDay(k+'-01',{month:'long',year:'numeric'})}</td><td>${m.d}</td><td>${m.a}</td><td>${m.e}</td><td>${m.l}</td><td>${pbar(pct(m))}</td></tr>`).join('')}</tbody></table></div>`:''}`;
 }
 function stuResultsHTML(cls){
   const q=normKey(S.st.q);if(q.length<2||S.st.sid)return'';
@@ -1472,8 +1575,8 @@ function stuResultsHTML(cls){
   return out.length?`<div class="res">${out.map(s=>`<button data-act="pickStu" data-sid="${esc(s.id)}"><b>${esc(s.n)}</b><span class="muted small">${esc(s.cn)}</span></button>`).join('')}</div>`:`<p class="muted small">لا نتائج.</p>`;
 }
 function statSchoolHTML(){
-  const st=S.st;const rows=S.classes.map(c=>{const recs=st.recs.filter(r=>r.c===c.id);const t=[...tally(recs).values()].reduce((s,x)=>({d:s.d+x.d,a:s.a+x.a,l:s.l+x.l,e:s.e+x.e}),{d:0,a:0,l:0,e:0});return{c,days:new Set(recs.map(r=>r.date)).size,...t,p:pct(t)}});
-  const all=tally(st.recs);const top=[...all.entries()].map(([id,s])=>({id,...s})).filter(x=>x.a+x.e>0).sort((a,b)=>(b.a+b.e)-(a.a+a.e)).slice(0,15);
+  const st=S.st,all0=stRecs();const rows=S.classes.map(c=>{const recs=all0.filter(r=>r.c===c.id);const t=[...tally(recs).values()].reduce((s,x)=>({d:s.d+x.d,a:s.a+x.a,l:s.l+x.l,e:s.e+x.e}),{d:0,a:0,l:0,e:0});return{c,days:new Set(recs.map(r=>r.date+'#'+(r.per||0))).size,...t,p:pct(t)}});
+  const all=tally(all0);const top=[...all.entries()].map(([id,s])=>({id,...s})).filter(x=>x.a+x.e>0).sort((a,b)=>(b.a+b.e)-(a.a+a.e)).slice(0,15);
   const T=rows.reduce((s,r)=>({d:s.d+r.d,a:s.a+r.a,l:s.l+r.l,e:s.e+r.e}),{d:0,a:0,l:0,e:0});
   return`<div class="kpis"><div class="kpi ${pct(T)!==null&&pct(T)<90?'bad':'ok'}"><b>${pct(T)===null?'—':pct(T)+'%'}</b><span>متوسط الحضور في المدرسة</span></div><div class="kpi bad"><b>${T.a}</b><span>غياب</span></div><div class="kpi in"><b>${T.e}</b><span>بعذر</span></div><div class="kpi wn"><b>${T.l}</b><span>تأخر</span></div></div>
 <div class="card tw"><table><thead><tr><th>الفصل</th><th>الطلاب</th><th>أيام مسجلة</th><th>غياب</th><th>بعذر</th><th>تأخر</th><th style="min-width:160px">نسبة الحضور</th></tr></thead><tbody>${rows.map(r=>`<tr><td><b>${esc(r.c.name)}</b></td><td>${(S.rosters[r.c.id]||[]).length}</td><td>${r.days}</td><td>${r.a}</td><td>${r.e}</td><td>${r.l}</td><td>${pbar(r.p)}</td></tr>`).join('')}</tbody></table></div>
@@ -1483,9 +1586,9 @@ function exportStats(){
   const st=S.st;if(!st.recs)return;const rng=`${st.from}_${st.to}`;
   if(st.mode==='class'&&st.cid){const{rows}=classStatRows(st.cid);
     saveXlsx(`إحصائيات-${cname(st.cid)}-${rng}.xlsx`,[{name:'الطلاب',rows:[['الطالب','أيام مسجلة','غياب','بعذر','تأخر','نسبة الحضور %'],...rows.map(r=>[r.n,r.d,r.a,r.e,r.l,r.p??''])]}])}
-  else if(st.mode==='student'&&st.sid){const recs=st.recs.filter(r=>r.r.includes(st.sid)).sort((a,b)=>a.date.localeCompare(b.date));
-    saveXlsx(`إحصائيات-${nameOf(st.sid)}-${rng}.xlsx`,[{name:'الطالب',rows:[['التاريخ','الحالة','الفصل','سجّلها'],...recs.map(r=>[r.date,CODES[r.m[st.sid]||'p'].t,cname(r.c),r.bn||''])]}])}
-  else if(st.mode==='school'){const rows=S.classes.map(c=>{const recs=st.recs.filter(r=>r.c===c.id);const t=[...tally(recs).values()].reduce((s,x)=>({d:s.d+x.d,a:s.a+x.a,l:s.l+x.l,e:s.e+x.e}),{d:0,a:0,l:0,e:0});return[c.name,(S.rosters[c.id]||[]).length,t.a,t.e,t.l,pct(t)??'']});
+  else if(st.mode==='student'&&st.sid){const recs=stRecs().filter(r=>r.r.includes(st.sid)).sort((a,b)=>a.date.localeCompare(b.date)||(a.per||0)-(b.per||0));
+    saveXlsx(`إحصائيات-${nameOf(st.sid)}-${rng}.xlsx`,[{name:'الطالب',rows:[perOn()?['التاريخ','الحصة','الحالة','الفصل','سجّلها']:['التاريخ','الحالة','الفصل','سجّلها'],...recs.map(r=>perOn()?[r.date,perLabel(r.per),CODES[r.m[st.sid]||'p'].t,cname(r.c),r.bn||'']:[r.date,CODES[r.m[st.sid]||'p'].t,cname(r.c),r.bn||''])]}])}
+  else if(st.mode==='school'){const rows=S.classes.map(c=>{const recs=stRecs().filter(r=>r.c===c.id);const t=[...tally(recs).values()].reduce((s,x)=>({d:s.d+x.d,a:s.a+x.a,l:s.l+x.l,e:s.e+x.e}),{d:0,a:0,l:0,e:0});return[c.name,(S.rosters[c.id]||[]).length,t.a,t.e,t.l,pct(t)??'']});
     saveXlsx(`إحصائيات-المدرسة-${rng}.xlsx`,[{name:'الفصول',rows:[['الفصل','الطلاب','غياب','بعذر','تأخر','نسبة الحضور %'],...rows]}])}
   else toast('اختر طالباً أو فصلاً أولاً','bad');
 }
@@ -1502,8 +1605,17 @@ function settingsHTML(){
 <div class="f"><span class="muted" style="display:block;margin-bottom:6px;font-size:14px">أيام الدوام</span><div class="days">${DAYN.map((x,i)=>`<label><input type="checkbox" data-chg="sdday" data-d="${i}" ${(d.days||[]).includes(i)?'checked':''}> ${x}</label>`).join('')}</div></div>
 <div class="note" style="margin-bottom:12px">الوكيل يستطيع التحضير والتعديل في أي وقت. ويمكنك إعطاء معلم معيّن صلاحية «تجاوز وقت الإدخال» من تبويب المعلمون.</div>
 <button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div>
+<div class="card"><h3>التحضير حسب الحصص</h3>
+<div class="optbar" style="margin-bottom:8px"><label class="ck"><input type="checkbox" data-chg="sdperon" ${+d.periods>0?'checked':''}> <b>تفعيل التحضير حسب الحصص</b></label>
+<label class="f" style="margin:0"><span>عدد الحصص</span><select id="sd-pcount" data-chg="sdpcount" ${+d.periods>0?'':'disabled'}>${[1,2,3,4,5,6,7,8].map(i=>`<option value="${i}" ${(+d.periods||7)===i?'selected':''}>${i}</option>`).join('')}</select></label></div>
+<p class="muted small" style="margin:0 0 14px">عند التفعيل يختار المعلم الحصة أولاً ثم الفصل ثم يُدخل الغياب، ويظهر للوكيل جدول الفصول × الحصص. التحضير اليومي القديم يبقى محفوظاً كما هو.</p>
+<div class="grid g2"><label class="f"><span>بداية اليوم الدراسي (لإدخال الحصص)</span><input type="time" id="sd-pstart" data-chg="sdpstart" value="${esc(d.pStart||'06:30')}"></label>
+<label class="f"><span>نهاية اليوم الدراسي</span><input type="time" id="sd-pend" data-chg="sdpend" value="${esc(d.pEnd||'14:00')}"></label></div>
+<p class="muted small" style="margin:0">في وضع الحصص يُستخدم هذا الوقت بدل «وقت إدخال الغياب» أعلاه، ليتمكن المعلمون من التحضير طوال اليوم الدراسي. لا تنسَ تشغيل ملف <span dir="ltr">periods.sql</span> في Supabase مرة واحدة.</p>
+<div class="bar" style="margin:12px 0 0"><span class="sp"></span><button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div></div>
 <div class="card"><h3>دخول المعلمين وبطاقات الحساب</h3>
 <div class="optbar" style="margin-bottom:8px;border-color:#fca5a5"><label class="ck"><input type="checkbox" data-chg="sdopen" ${S.settings.openEntry?'checked':''}> <b>فتح إدخال الغياب للجميع (بدون اسم مستخدم أو كلمة مرور)</b></label></div>
+<div id="oe-stat" class="small" style="background:var(--bg);border:1px solid var(--ln);border-radius:10px;padding:10px 12px;margin:0 0 10px">${S.oeHtml||'<span class="muted small">جاري الفحص…</span>'}</div>
 <p class="muted small" style="margin:0 0 14px">يظهر في صفحة الدخول زر أحمر «إدخال الغياب» يدخل به أي شخص كمعلم ويرى جميع الفصول، ويبقى اسم المستخدم وكلمة المرور تحته لدخول الوكيل. <b>تنبيه:</b> أي شخص يملك رابط الموقع يستطيع إدخال الغياب. (يُطبَّق فوراً عند التغيير)</p>
 <label class="f"><span>رابط الموقع (يظهر في رسالة الواتساب والبطاقة ورمز QR)</span><input type="text" id="sd-site" dir="ltr" data-inp="sdsite" value="${esc(d.siteUrl||'')}" placeholder="${esc(autoLink())}"></label>
 <div class="optbar" style="margin-bottom:8px"><label class="ck"><input type="checkbox" data-chg="sdnopw" ${S.settings.noPw?'checked':''}> <b>دخول المعلمين بدون كلمة مرور (اسم المستخدم فقط)</b></label></div>
@@ -1523,7 +1635,7 @@ async function saveSettings(){
   if(hm(d.end)<=hm(d.start)){toast('وقت النهاية يجب أن يكون بعد وقت البداية','bad');return}
   try{
     /* نقرأ آخر نسخة من الخادم ونعدّل الحقول المعنية فقط (لا نمسح extendUntil) */
-    await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz,siteUrl:nrm(d.siteUrl||''),waTpl:String(d.waTpl||''),syncPw:!!d.syncPw}));
+    await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz,siteUrl:nrm(d.siteUrl||''),waTpl:String(d.waTpl||''),syncPw:!!d.syncPw,periods:Math.max(0,Math.min(8,+d.periods||0)),pStart:d.pStart||'06:30',pEnd:d.pEnd||'14:00'}));
     toast('تم حفظ الإعدادات','ok');S.sd=null;render();
   }catch(e){toast(errMsg(e),'bad')}
 }
@@ -1606,11 +1718,13 @@ const ACT={
     const v=t.dataset.v,me=curUser();S.view=v;
     if(v==='attend'&&isAdmin(me)){const cid=(S.att&&S.att.cid)||(S.classes[0]&&S.classes[0].id);if(cid){openAttend(cid,(S.att&&S.att.date)||nowInfo().date);return}}
     if(v==='settings')S.sd=null;
+    if(v==='settings')setTimeout(checkOpenEntry,0);
     if(v==='teachers')vaultPull().then(ch=>{if(ch&&S.view==='teachers')render()}).catch(()=>{});
     if(v==='stats'){initStats();if(S.st.recs)render();return}
     render();
   },
-  openClass(t){openAttend(t.dataset.cid,nowInfo().date)},
+  openClass(t){openAttend(t.dataset.cid,nowInfo().date,t.dataset.p?+t.dataset.p:undefined)},
+  pickPer(t){const v=+t.dataset.p;S.per=v||null;S.view='home';render()},
   mark(t){const a=S.att;if(!a||attStatus().ok===false)return;const sid=t.dataset.sid,c=t.dataset.code;if(c==='p')delete a.draft[sid];else a.draft[sid]=c;a.dirty=true;paintAtt()},
   allPresent(){if(!S.att)return;S.att.draft={};S.att.dirty=true;paintAtt()},
   saveAtt:saveAttendance,
@@ -1632,7 +1746,7 @@ const ACT={
   addUser(){userModal()},editUser(t){userModal(t.dataset.uid)},togUser(t){toggleUser(t.dataset.uid)},delUser(t){deleteUser(t.dataset.uid)},
   waUser(t){waUser(t.dataset.uid)},cardUser(t){cardUser(t.dataset.uid)},printAllCards(){printAllCards()},
   showPw(){const b=$('#lp-box');if(b)b.style.display='';setNoPwFlag(false);const f=$('#lp');if(f)f.focus()},
-  install(){installApp()},refreshApp(){refreshApp()},openEntry(){openEntryLogin()},
+  install(){installApp()},refreshApp(){refreshApp()},openEntry(){openEntryLogin()},copyOpenLink(){copyText(openLink());toast('تم نسخ الرابط المباشر','ok')},
   stMode(t){S.st.mode=t.dataset.m;render()},
   pickStu(t){S.st.sid=t.dataset.sid;const i=S.idx.get(S.st.sid);S.st.q=i?i.n:'';render()},
   stExport:exportStats,
@@ -1648,8 +1762,9 @@ const INP={
 };
 function paintAtt2(){const st=attStatus();const l=$('#att-list');if(l)l.innerHTML=attListHTML(!st.ok)}
 const CHG={
-  async aclass(t){openAttend(t.value,S.att.date)},
-  async adate(t){if(t.value)openAttend(S.att.cid,t.value)},
+  async aclass(t){openAttend(t.value,S.att.date,S.att.per)},
+  async adate(t){if(t.value)openAttend(S.att.cid,t.value,S.att.per)},
+  async aper(t){openAttend(S.att.cid,S.att.date,+t.value)},
   sfcls(t){S.stu.cid=t.value;S.stu.sel=new Set();S.stu.lim=100;render()},
   sel(t){t.checked?S.stu.sel.add(t.dataset.sid):S.stu.sel.delete(t.dataset.sid);render()},
   selall(t){const shown=stuList().slice(0,S.stu.lim);shown.forEach(s=>t.checked?S.stu.sel.add(s.id):S.stu.sel.delete(s.id));render()},
@@ -1659,6 +1774,10 @@ const CHG={
   sdnopw(t){toggleNoPw(t.checked)},
   sdopen(t){toggleOpenEntry(t.checked)},
   sdsync(t){S.sd.syncPw=t.checked},
+  sdperon(t){S.sd.periods=t.checked?(+S.sd.periods||7):0;render()},
+  sdpcount(t){S.sd.periods=+t.value||7;render()},
+  sdpstart(t){S.sd.pStart=t.value},
+  sdpend(t){S.sd.pEnd=t.value},
   tchrebuild(){tchBuild()},
   tchfile(t){
     const f=t.files&&t.files[0];if(!f)return;
@@ -1680,6 +1799,7 @@ const CHG={
   stfrom(t){S.st.from=t.value;S.st.preset='custom';fetchStats()},
   stto(t){S.st.to=t.value;S.st.preset='custom';fetchStats()},
   stcls(t){S.st.cid=t.value;render()},
+  stper(t){S.st.per=t.value;render()},
   stsort(t){S.st.sort=t.value;render()},
   sdmode(t){S.sd.mode=t.value;render()},
   sdstart(t){S.sd.start=t.value},sdend(t){S.sd.end=t.value},sdtz(t){S.sd.tz=t.value},
