@@ -223,7 +223,7 @@ async function refreshApp(){
 }
 
 /* ================= الثوابت والأدوات ================= */
-const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false,openEntry:false,periods:0,pStart:'06:30',pEnd:'14:00'};
+const DEF={schoolName:'',mode:'auto',start:'06:30',end:'09:30',days:[0,1,2,3,4],tz:'Asia/Riyadh',extendUntil:0,siteUrl:'',waTpl:'',noPw:false,syncPw:false,openEntry:false,periods:0,pStart:'06:30',pEnd:'14:00',absTpl:''};
 const EMAIL_DOMAIN='att.local';   /* نطاق داخلي وهمي لتحويل اسم المستخدم إلى بريد لـ Supabase Auth؛ لا تُرسل عليه رسائل. إن رفضه Supabase غيّره لنطاق حقيقي */
 const toEmail=un=>un+'@'+EMAIL_DOMAIN;
 const UN_RE=/^[a-z0-9._-]{3,30}$/;
@@ -447,7 +447,7 @@ document.addEventListener('visibilitychange',()=>{if(document.visibilityState===
 function resetSession(){
   stopLive();clearTimeout(refT);
   Object.assign(S,{meId:null,users:[],classes:[],rosters:{},monthAtt:{},subMo:null,dataSig:null,monthSig:null,gsig:null,settings:{...DEF},
-    view:'home',att:null,st:null,sd:null,imp:null,per:null,stu:{cid:'all',q:'',sel:new Set(),lim:100},phase:'auth'});
+    view:'home',att:null,st:null,sd:null,imp:null,per:null,nf:null,nfq:null,stu:{cid:'all',q:'',sel:new Set(),lim:100},phase:'auth'});
   reindex();closeModal();render();
   if(sb)probeOpenEntry().then(()=>{if(S.phase==='auth')render()});
 }
@@ -553,7 +553,7 @@ function setupHTML(){return`<div class="auth"><div class="card"><img class="appl
 
 function appHTML(me){
   const admin=isAdmin(me);
-  const tabs=admin?[['home','الرئيسية'],['attend','التحضير'],['students','الطلاب'],['classes','الفصول'],['teachers','المعلمون'],['stats','الإحصائيات'],['settings','الإعدادات']]
+  const tabs=admin?[['home','الرئيسية'],['attend','التحضير'],['students','الطلاب'],['classes','الفصول'],['teachers','المعلمون'],['stats','الإحصائيات'],['notify','إرسال الغياب'],['settings','الإعدادات']]
     :[['home','التحضير'],...(canStats(me)?[['stats','الإحصائيات']]:[])];
   const cur=(!admin&&S.view==='attend')?'home':S.view;
   let body='';
@@ -564,6 +564,7 @@ function appHTML(me){
     case 'classes':body=admin?classesHTML():'';break;
     case 'teachers':body=admin?teachersHTML():'';break;
     case 'stats':body=canStats(me)?statsHTML(me):'';break;
+    case 'notify':body=admin?notifyHTML():'';break;
     case 'settings':body=admin?settingsHTML():'';break;
   }
   return`<header class="top"><div class="wrap"><div class="logo">${MARK_SVG}</div><div class="brandt"><b>${esc(schoolName())}</b><small>${admin?'لوحة الوكيل':'بوابة المعلم'}</small></div>
@@ -928,7 +929,7 @@ async function probeOpenEntry(){
     S.openEntry=!!data;setOpenFlag(!!data);
   }catch(e){}
 }
-const APP_VER='2026.09.21-c';
+const APP_VER='2026.09.22-a';
 const openLink=()=>{try{const u=new URL(siteLink());u.searchParams.set('open','1');return u.toString()}catch(e){return siteLink()+'?open=1'}};
 /* فحص حالة الإدخال المفتوح في الإعدادات: يوضح سبب عدم ظهور الزر الأحمر */
 async function checkOpenEntry(){
@@ -1593,6 +1594,126 @@ function exportStats(){
   else toast('اختر طالباً أو فصلاً أولاً','bad');
 }
 
+/* ================= إرسال الغياب لأولياء الأمور ================= */
+const DEF_ABS=`السلام عليكم ورحمة الله وبركاته
+ولي أمر الطالب: {student}
+نفيدكم بأن ابنكم كان {status} يوم {day} {date}{periods}.
+نأمل متابعته وإفادة المدرسة بسبب الغياب.
+
+إدارة {school}`;
+const ABS_WORD={a:'غائباً',e:'غائباً بعذر',l:'متأخراً'};
+const ABS_LBL={a:'غائب',e:'غائب بعذر',l:'متأخر'};
+/* سجل الإرسال في هذا الجهاز: {التاريخ:{رقم الطالب:وقت الإرسال}} */
+const SENT_KEY='att-sent-v1';
+function sentAll(){try{return JSON.parse(localStorage.getItem(SENT_KEY)||'{}')||{}}catch(e){return{}}}
+function sentAt(date,sid){return(sentAll()[date]||{})[sid]||0}
+function markSent(date,sid){
+  const a=sentAll();(a[date]=a[date]||{})[sid]=nowMs();
+  const keep=addDays(nowInfo().date,-60);for(const k of Object.keys(a))if(k<keep)delete a[k];
+  try{localStorage.setItem(SENT_KEY,JSON.stringify(a))}catch(e){}
+}
+function initNotify(){
+  if(!S.nf)S.nf={date:nowInfo().date,cid:'all',per:'all',kind:'a',days:null,loading:false};
+  render();nfLoad();
+}
+async function nfLoad(){
+  const nf=S.nf;if(!nf||!nf.date)return;
+  const tok=nf.tok=Math.random();nf.loading=true;render();
+  try{
+    const snap=await S.db.collection('att').where('mo','==',nf.date.slice(0,7)).get();
+    if(nf.tok!==tok)return;
+    const m={};snap.docs.forEach(d=>{const x=d.data(),r=(x.days||{})[nf.date];if(r)m[x.c]={...decRec(r),daily:!!r.r}});
+    nf.days=m;
+  }catch(e){toast(errMsg(e),'bad');nf.days={}}
+  if(nf.tok===tok){nf.loading=false;render()}
+}
+const stuOf=sid=>S.idx.get(sid)||{id:sid,n:'طالب محذوف',ph:''};
+function nfRows(){
+  const nf=S.nf;if(!nf||!nf.days)return[];
+  const kinds=nf.kind==='all'?['a','e','l']:nf.kind==='ae'?['a','e']:['a'];
+  const out=[];
+  for(const c of S.classes){
+    if(nf.cid!=='all'&&c.id!==nf.cid)continue;
+    const day=nf.days[c.id];if(!day)continue;
+    const recs=[];
+    if((nf.per==='all'||nf.per==='0')&&day.daily)recs.push([0,day]);
+    if(day.p)for(const [k,v] of Object.entries(day.p))if(nf.per==='all'||nf.per===k)recs.push([+k,v]);
+    const per=new Map();
+    for(const [pn,r] of recs)for(const [sid,code] of Object.entries(r.m||{})){
+      if(!kinds.includes(code))continue;
+      let o=per.get(sid);if(!o){o={a:[],e:[],l:[]};per.set(sid,o)}o[code].push(pn);
+    }
+    for(const [sid,o] of per){const code=o.a.length?'a':o.e.length?'e':'l';out.push({sid,s:stuOf(sid),c,o,code})}
+  }
+  return out.sort((x,y)=>cmpAr(x.c.name,y.c.name)||cmpAr(x.s.n,y.s.n));
+}
+const perNames=list=>list.filter(Boolean).sort((a,b)=>a-b).map(p=>PERN[p]||p).join('، ');
+function absText(r){
+  const date=S.nf.date,ps=r.o[r.code].filter(Boolean);
+  const periods=ps.length?` في ${ps.length>1?'الحصص':'الحصة'}: ${perNames(ps)}`:'';
+  return String(S.settings.absTpl||DEF_ABS)
+    .replace(/\{student\}/g,r.s.n).replace(/\{class\}/g,r.c.name).replace(/\{status\}/g,ABS_WORD[r.code])
+    .replace(/\{day\}/g,fmtDay(date,{weekday:'long'})).replace(/\{date\}/g,fmtDay(date,{day:'numeric',month:'long',year:'numeric'}))
+    .replace(/\{hijri\}/g,hijri(date)).replace(/\{periods\}/g,periods).replace(/\{school\}/g,schoolName());
+}
+function openWa(phone,text){
+  const url='https://wa.me/'+waPhone(phone)+'?text='+encodeURIComponent(text);
+  const w=window.open(url,'_blank');if(!w)location.href=url;
+}
+function notifyHTML(){
+  const nf=S.nf;if(!nf)return'';
+  const n=nowInfo(),rows=nf.days?nfRows():[];
+  const withPh=rows.filter(r=>waPhone(r.s.ph)),noPh=rows.length-withPh.length,sent=rows.filter(r=>sentAt(nf.date,r.sid)).length;
+  const toolbar=`<div class="card"><div class="bar" style="margin:0">
+<label class="f" style="margin:0"><span>اليوم</span><input type="date" id="nf-date" data-chg="nfdate" value="${esc(nf.date)}" max="${n.date}"></label>
+<label class="f" style="margin:0"><span>الفصل</span><select id="nf-cls" data-chg="nfcls"><option value="all">المدرسة كاملة</option>${S.classes.map(c=>`<option value="${esc(c.id)}" ${nf.cid===c.id?'selected':''}>${esc(c.name)}</option>`).join('')}</select></label>
+${perOn()?`<label class="f" style="margin:0"><span>الحصة</span><select id="nf-per" data-chg="nfper"><option value="all" ${nf.per==='all'?'selected':''}>كل الحصص</option>${perList().map(i=>`<option value="${i}" ${nf.per===String(i)?'selected':''}>${esc(perName(i))}</option>`).join('')}<option value="0" ${nf.per==='0'?'selected':''}>التحضير اليومي</option></select></label>`:''}
+<label class="f" style="margin:0"><span>الحالات</span><select id="nf-kind" data-chg="nfkind"><option value="a" ${nf.kind==='a'?'selected':''}>الغياب فقط</option><option value="ae" ${nf.kind==='ae'?'selected':''}>الغياب والغياب بعذر</option><option value="all" ${nf.kind==='all'?'selected':''}>الغياب والتأخر</option></select></label>
+<span class="sp"></span>${S.dl&&rows.length?'<button class="btn" data-act="nfExport">تصدير Excel</button>':''}
+<button class="btn wa" data-act="nfAll" ${withPh.length?'':'disabled'}>إرسال للجميع عبر واتساب</button></div></div>`;
+  if(nf.loading||!nf.days)return`<h2 style="margin-bottom:12px">إرسال الغياب لأولياء الأمور</h2>`+toolbar+`<div class="center"><div class="spin"></div></div>`;
+  const kp=`<div class="kpis"><div class="kpi bad"><b>${rows.length}</b><span>طلاب في القائمة</span></div><div class="kpi ok"><b>${sent}</b><span>تم الإرسال لهم</span></div><div class="kpi wn"><b>${rows.length-sent}</b><span>لم يُرسل بعد</span></div><div class="kpi ${noPh?'bad':''}"><b>${noPh}</b><span>بدون جوال ولي أمر</span></div></div>`;
+  const tbl=`<div class="card tw"><table><thead><tr><th>#</th><th>الطالب</th><th>الفصل</th><th>الحالة</th>${perOn()?'<th>الحصص</th>':''}<th>جوال ولي الأمر</th><th></th></tr></thead><tbody>
+${rows.map((r,i)=>{const ph=waPhone(r.s.ph),at=sentAt(nf.date,r.sid);
+  const det=['a','e','l'].filter(k=>r.o[k].filter(Boolean).length).map(k=>`${ABS_LBL[k]}: ${perNames(r.o[k])}`).join(' — ');
+  return`<tr><td class="muted">${i+1}</td><td><b>${esc(r.s.n)}</b></td><td>${esc(r.c.name)}</td><td><span class="pill ${CODES[r.code].c}">${ABS_LBL[r.code]}</span></td>${perOn()?`<td class="wrapc small">${esc(det||'اليومي')}</td>`:''}
+<td dir="ltr" style="text-align:right">${ph?esc(r.s.ph):'<span class="pill bad">لا يوجد</span>'}</td>
+<td style="white-space:nowrap">${ph?`<button class="btn sm wa" data-act="nfOne" data-sid="${esc(r.sid)}">واتساب</button>`:`<button class="btn sm" data-act="editStu" data-sid="${esc(r.sid)}">إضافة جوال</button>`}${at?` <span class="pill ok" title="أُرسل من هذا الجهاز">✓ ${fmtClock(at)}</span>`:''}</td></tr>`}).join('')||`<tr><td colspan="${perOn()?7:6}" class="muted">${Object.keys(nf.days).length?'لا يوجد طلاب غائبون حسب الاختيار 👍':'لم يُسجَّل أي تحضير في هذا اليوم.'}</td></tr>`}</tbody></table></div>
+<p class="muted small">علامة ✓ تعني أن رسالة هذا الطالب فُتحت في واتساب من هذا الجهاز. «إرسال للجميع» يعرض الطلاب واحداً تلو الآخر لأن واتساب لا يسمح بالإرسال الجماعي التلقائي، فتضغط «إرسال» لكل طالب ثم ترجع للصفحة ليظهر التالي. يمكن تعديل نص الرسالة من تبويب الإعدادات.</p>`;
+  return`<h2 style="margin-bottom:12px">إرسال الغياب لأولياء الأمور</h2>`+toolbar+kp+tbl;
+}
+function nfOne(sid){
+  const r=nfRows().find(x=>x.sid===sid);if(!r)return;
+  openModal('إرسال لولي أمر: '+r.s.n,
+`<p class="muted small" style="margin-top:0">${esc(r.c.name)} — <span dir="ltr">${esc(r.s.ph)}</span></p>
+<label class="f" style="margin-bottom:0"><span>نص الرسالة</span><textarea id="nf-tx" rows="9" style="width:100%;border:1px solid var(--ln);border-radius:10px;padding:10px 12px;background:var(--sf);resize:vertical">${esc(absText(r))}</textarea></label>`,
+  [{t:'إلغاء',close:true},{t:'فتح واتساب',cls:'primary',fn:()=>{openWa(r.s.ph,val('nf-tx'));markSent(S.nf.date,r.sid);render()}}],{nofocus:true});
+}
+function nfAll(){
+  const rows=nfRows().filter(r=>waPhone(r.s.ph));
+  if(!rows.length){toast('لا يوجد طلاب لديهم جوال ولي أمر','bad');return}
+  const unsent=rows.filter(r=>!sentAt(S.nf.date,r.sid));
+  S.nfq={list:unsent.length?unsent:rows,i:0,done:0};
+  nfStep();
+}
+function nfStep(){
+  const q=S.nfq;if(!q)return;
+  const r=q.list[q.i];
+  if(!r){closeModal();toast(`انتهى الإرسال: ${q.done} من ${q.list.length}`,'ok');S.nfq=null;render();return}
+  openModal(`إرسال الغياب (${q.i+1} من ${q.list.length})`,
+`<div class="note" style="margin-bottom:10px"><b>${esc(r.s.n)}</b> — ${esc(r.c.name)} — <span dir="ltr">${esc(r.s.ph)}</span></div>
+<textarea id="nf-tx" rows="8" style="width:100%;border:1px solid var(--ln);border-radius:10px;padding:10px 12px;background:var(--sf);resize:vertical">${esc(absText(r))}</textarea>
+<p class="muted small" style="margin:6px 0 0">بعد الإرسال في واتساب ارجع لهذه الصفحة ليظهر الطالب التالي.</p>`,
+  [{t:'إيقاف',fn:()=>{S.nfq=null;closeModal();render();return false}},
+   {t:'تخطّي',fn:()=>{q.i++;nfStep();return false}},
+   {t:'إرسال عبر واتساب',cls:'primary',fn:()=>{openWa(r.s.ph,val('nf-tx'));markSent(S.nf.date,r.sid);q.done++;q.i++;nfStep();return false}}],{nofocus:true});
+}
+function nfExport(){
+  const rows=nfRows();if(!rows.length)return;
+  const head=['الطالب','الفصل','الحالة',...(perOn()?['الحصص']:[]),'جوال ولي الأمر','أُرسل'];
+  saveXlsx(`الغياب-${S.nf.date}.xlsx`,[{name:'الغياب',rows:[head,...rows.map(r=>[r.s.n,r.c.name,ABS_LBL[r.code],...(perOn()?[['a','e','l'].filter(k=>r.o[k].filter(Boolean).length).map(k=>`${ABS_LBL[k]}: ${perNames(r.o[k])}`).join(' — ')||'اليومي']:[]),r.s.ph||'',sentAt(S.nf.date,r.sid)?'نعم':''])]}]);
+}
+
 /* ================= الإعدادات ================= */
 function settingsHTML(){
   if(!S.sd)S.sd=clone(S.settings);const d=S.sd,n=nowInfo(),g=timeGate();
@@ -1613,6 +1734,10 @@ function settingsHTML(){
 <label class="f"><span>نهاية اليوم الدراسي</span><input type="time" id="sd-pend" data-chg="sdpend" value="${esc(d.pEnd||'14:00')}"></label></div>
 <p class="muted small" style="margin:0">في وضع الحصص يُستخدم هذا الوقت بدل «وقت إدخال الغياب» أعلاه، ليتمكن المعلمون من التحضير طوال اليوم الدراسي. لا تنسَ تشغيل ملف <span dir="ltr">periods.sql</span> في Supabase مرة واحدة.</p>
 <div class="bar" style="margin:12px 0 0"><span class="sp"></span><button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div></div>
+<div class="card"><h3>رسالة الغياب لأولياء الأمور</h3>
+<label class="f"><span>نص رسالة الواتساب (تبويب «إرسال الغياب»)</span><textarea id="sd-abs" rows="8" data-inp="sdabs" style="width:100%;border:1px solid var(--ln);border-radius:10px;padding:10px 12px;background:var(--sf);resize:vertical">${esc(d.absTpl||DEF_ABS)}</textarea></label>
+<p class="muted small" style="margin:-6px 0 12px">المتغيرات: <span dir="ltr">{student}</span> اسم الطالب، <span dir="ltr">{class}</span> الفصل، <span dir="ltr">{status}</span> الحالة (غائباً / غائباً بعذر / متأخراً)، <span dir="ltr">{day}</span> اسم اليوم، <span dir="ltr">{date}</span> التاريخ الميلادي، <span dir="ltr">{hijri}</span> التاريخ الهجري، <span dir="ltr">{periods}</span> الحصص (في وضع الحصص فقط)، <span dir="ltr">{school}</span> اسم المدرسة.</p>
+<div class="bar" style="margin:0"><button class="btn" data-act="absReset">استعادة النص الافتراضي</button><span class="sp"></span><button class="btn primary" data-act="saveSettings">حفظ الإعدادات</button></div></div>
 <div class="card"><h3>دخول المعلمين وبطاقات الحساب</h3>
 <div class="optbar" style="margin-bottom:8px;border-color:#fca5a5"><label class="ck"><input type="checkbox" data-chg="sdopen" ${S.settings.openEntry?'checked':''}> <b>فتح إدخال الغياب للجميع (بدون اسم مستخدم أو كلمة مرور)</b></label></div>
 <div id="oe-stat" class="small" style="background:var(--bg);border:1px solid var(--ln);border-radius:10px;padding:10px 12px;margin:0 0 10px">${S.oeHtml||'<span class="muted small">جاري الفحص…</span>'}</div>
@@ -1635,7 +1760,7 @@ async function saveSettings(){
   if(hm(d.end)<=hm(d.start)){toast('وقت النهاية يجب أن يكون بعد وقت البداية','bad');return}
   try{
     /* نقرأ آخر نسخة من الخادم ونعدّل الحقول المعنية فقط (لا نمسح extendUntil) */
-    await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz,siteUrl:nrm(d.siteUrl||''),waTpl:String(d.waTpl||''),syncPw:!!d.syncPw,periods:Math.max(0,Math.min(8,+d.periods||0)),pStart:d.pStart||'06:30',pEnd:d.pEnd||'14:00'}));
+    await S.db.doc('meta/settings').mutate(cur=>({...DEF,...(cur||{}),schoolName:nrm(d.schoolName),mode:d.mode,start:d.start,end:d.end,days:d.days,tz:d.tz,siteUrl:nrm(d.siteUrl||''),waTpl:String(d.waTpl||''),syncPw:!!d.syncPw,periods:Math.max(0,Math.min(8,+d.periods||0)),pStart:d.pStart||'06:30',pEnd:d.pEnd||'14:00',absTpl:String(d.absTpl||'')}));
     toast('تم حفظ الإعدادات','ok');S.sd=null;render();
   }catch(e){toast(errMsg(e),'bad')}
 }
@@ -1721,6 +1846,7 @@ const ACT={
     if(v==='settings')setTimeout(checkOpenEntry,0);
     if(v==='teachers')vaultPull().then(ch=>{if(ch&&S.view==='teachers')render()}).catch(()=>{});
     if(v==='stats'){initStats();if(S.st.recs)render();return}
+    if(v==='notify'){initNotify();return}
     render();
   },
   openClass(t){openAttend(t.dataset.cid,nowInfo().date,t.dataset.p?+t.dataset.p:undefined)},
@@ -1746,7 +1872,7 @@ const ACT={
   addUser(){userModal()},editUser(t){userModal(t.dataset.uid)},togUser(t){toggleUser(t.dataset.uid)},delUser(t){deleteUser(t.dataset.uid)},
   waUser(t){waUser(t.dataset.uid)},cardUser(t){cardUser(t.dataset.uid)},printAllCards(){printAllCards()},
   showPw(){const b=$('#lp-box');if(b)b.style.display='';setNoPwFlag(false);const f=$('#lp');if(f)f.focus()},
-  install(){installApp()},refreshApp(){refreshApp()},openEntry(){openEntryLogin()},copyOpenLink(){copyText(openLink());toast('تم نسخ الرابط المباشر','ok')},
+  install(){installApp()},refreshApp(){refreshApp()},openEntry(){openEntryLogin()},nfOne(t){nfOne(t.dataset.sid)},nfAll(){nfAll()},nfExport(){nfExport()},absReset(){S.sd.absTpl='';render()},copyOpenLink(){copyText(openLink());toast('تم نسخ الرابط المباشر','ok')},
   stMode(t){S.st.mode=t.dataset.m;render()},
   pickStu(t){S.st.sid=t.dataset.sid;const i=S.idx.get(S.st.sid);S.st.q=i?i.n:'';render()},
   stExport:exportStats,
@@ -1759,6 +1885,7 @@ const INP={
   sdsite(t){S.sd.siteUrl=t.value},
   waph(t){const h=$('#wa-hint');if(h){const p=waPhone(t.value);h.textContent=p?'+'+p:''}},
   sdwa(t){S.sd.waTpl=t.value},
+  sdabs(t){S.sd.absTpl=t.value},
 };
 function paintAtt2(){const st=attStatus();const l=$('#att-list');if(l)l.innerHTML=attListHTML(!st.ok)}
 const CHG={
@@ -1800,6 +1927,10 @@ const CHG={
   stto(t){S.st.to=t.value;S.st.preset='custom';fetchStats()},
   stcls(t){S.st.cid=t.value;render()},
   stper(t){S.st.per=t.value;render()},
+  nfdate(t){if(t.value){S.nf.date=t.value;S.nf.days=null;nfLoad()}},
+  nfcls(t){S.nf.cid=t.value;render()},
+  nfper(t){S.nf.per=t.value;render()},
+  nfkind(t){S.nf.kind=t.value;render()},
   stsort(t){S.st.sort=t.value;render()},
   sdmode(t){S.sd.mode=t.value;render()},
   sdstart(t){S.sd.start=t.value},sdend(t){S.sd.end=t.value},sdtz(t){S.sd.tz=t.value},
