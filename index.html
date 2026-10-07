@@ -819,9 +819,10 @@ function impPreviewHTML(){
   const noCls=groups.get('');
   return`<p style="margin:8px 0"><b>${im.rows.length}</b> طالب في الملف${im.found?'':' <span class="muted small">(لم يتم العثور على صف عناوين، تم افتراض الترتيب: الاسم، الفصل، الرقم، الجوال)</span>'}</p>
 <div class="tw card" style="padding:0;margin-bottom:10px"><table><thead><tr><th>الفصل في الملف</th><th>العدد</th><th>الحالة</th></tr></thead><tbody>${[...groups.entries()].filter(([k])=>k).map(([k,g])=>`<tr><td>${esc(g.name)}</td><td>${g.n}</td><td>${exist.has(k)?'<span class="pill ok">موجود</span>':'<span class="pill wn">فصل جديد</span>'}</td></tr>`).join('')||''}${noCls?`<tr><td class="muted">بدون فصل</td><td>${noCls.n}</td><td><span class="pill wn">يحتاج فصلاً افتراضياً</span></td></tr>`:''}</tbody></table></div>
-<label class="ck"><input type="checkbox" id="imp-auto" checked> إنشاء الفصول الجديدة تلقائياً</label>
+<label class="ck"><input type="checkbox" id="imp-auto" checked> إنشاء الفصول الجديدة تلقائياً</label><br>
+<label class="ck"><input type="checkbox" id="imp-upd" checked> <b>تحديث الطلاب الموجودين</b> (إضافة جوال ولي الأمر ورقم الطالب لمن سبق إضافتهم)</label>
 ${noCls?`<label class="f" style="margin-top:8px"><span>الفصل الافتراضي للطلاب بدون فصل</span><select id="imp-def">${classOpts('','— اختر —')}</select></label>`:''}
-<p class="muted small" style="margin-bottom:0">يتم تجاهل الطالب المكرر (نفس الرقم أو نفس الاسم داخل الفصل).</p>`;
+<p class="muted small" style="margin-bottom:0">لا تتكرر الأسماء: الطالب الموجود مسبقاً (نفس الرقم أو نفس الاسم داخل الفصل) لا يُضاف مرة ثانية، وإنما تُحدَّث بياناته من الملف إن كان خيار التحديث مفعّلاً.</p>`;
 }
 function importModal(){
   S.imp=null;
@@ -833,7 +834,7 @@ ${S.dl?`<button class="btn sm" data-act="tplStu" style="margin-bottom:10px">تن
 }
 async function runImport(){
   const im=S.imp;if(!im||!im.rows.length){toast('اختر ملفاً صحيحاً أولاً','bad');return false}
-  const auto=chk('imp-auto'),def=val('imp-def');
+  const auto=chk('imp-auto'),upd=chk('imp-upd'),def=val('imp-def');
   const byNorm=new Map(S.classes.map(c=>[normKey(c.name),c]));
   let usedNums=new Set();S.idx.forEach(s=>{if(s.num)usedNums.add(s.num)});
   const groups=new Map();
@@ -842,25 +843,38 @@ async function runImport(){
     const key=cls?cls.id:'new:'+normKey(label||'');
     if(!cls&&(!label||!auto))continue;
     const g=groups.get(key)||{cls,label,rows:[]};g.rows.push(r);groups.set(key,g)}
-  let added=0,skipped=0;const skippedRows=im.rows.length;
+  let added=0,skipped=0,updated=0;const skippedRows=im.rows.length;
   for(const g of groups.values()){
     let cid;
     if(g.cls)cid=g.cls.id;else{cid=rid('c');await S.db.doc('classes/'+cid).set({name:g.label,created:Date.now()});byNorm.set(normKey(g.label),{id:cid,name:g.label})}
-    let gAdded=0,gSkipped=0,gUsed=null;
+    let gAdded=0,gSkipped=0,gUpd=0,gUsed=null;
     await mutRoster(cid,list=>{
       /* تُعاد المحاولة عند تعارض متزامن، لذلك نبدأ العدّادات من الصفر في كل محاولة */
-      gAdded=0;gSkipped=0;gUsed=new Set(usedNums);
-      const names=new Set(list.map(s=>normKey(s.n)));
+      gAdded=0;gSkipped=0;gUpd=0;gUsed=new Set(usedNums);
+      const byName=new Map(list.map(s=>[normKey(s.n),s]));
+      const byNum=new Map(list.filter(s=>s.num).map(s=>[String(s.num),s]));
       for(const r of g.rows){
-        if((r.num&&gUsed.has(r.num))||names.has(normKey(r.n))){gSkipped++;continue}
-        list.push({id:rid('s'),n:r.n,num:r.num,ph:r.ph});names.add(normKey(r.n));if(r.num)gUsed.add(r.num);gAdded++;
+        /* طالب موجود في نفس الفصل: لا يُضاف مرة ثانية، وتُحدَّث بياناته الناقصة */
+        const ex=(r.num&&byNum.get(String(r.num)))||byName.get(normKey(r.n));
+        if(ex){
+          let ch=false;
+          if(upd){
+            if(r.ph&&r.ph!==ex.ph){ex.ph=r.ph;ch=true}
+            if(r.num&&!ex.num&&!gUsed.has(r.num)){ex.num=r.num;gUsed.add(r.num);byNum.set(String(r.num),ex);ch=true}
+          }
+          if(ch)gUpd++;else gSkipped++;
+          continue;
+        }
+        if(r.num&&gUsed.has(r.num)){gSkipped++;continue}   /* الرقم مستخدم لطالب في فصل آخر */
+        const ns={id:rid('s'),n:r.n,num:r.num,ph:r.ph};
+        list.push(ns);byName.set(normKey(r.n),ns);if(r.num){gUsed.add(r.num);byNum.set(String(r.num),ns)}gAdded++;
       }
       return list;
     });
-    added+=gAdded;skipped+=gSkipped;usedNums=gUsed;
+    added+=gAdded;skipped+=gSkipped;updated+=gUpd;usedNums=gUsed;
   }
-  const notPlaced=skippedRows-added-skipped;
-  toast(`تمت إضافة ${added} طالب${skipped?` • تجاهل ${skipped} مكرر`:''}${notPlaced>0?` • ${notPlaced} بدون فصل`:''}`,'ok');S.imp=null;
+  const notPlaced=skippedRows-added-skipped-updated;
+  toast(`تمت إضافة ${added} طالب${updated?` • تحديث بيانات ${updated}`:''}${skipped?` • ${skipped} موجود بدون تغيير`:''}${notPlaced>0?` • ${notPlaced} بدون فصل`:''}`,'ok');S.imp=null;
 }
 async function saveXlsx(filename,sheets){
   if(!window.XLSX){toast('تعذر تحميل مكتبة Excel','bad');return}
@@ -929,7 +943,7 @@ async function probeOpenEntry(){
     S.openEntry=!!data;setOpenFlag(!!data);
   }catch(e){}
 }
-const APP_VER='2026.09.22-a';
+const APP_VER='2026.09.22-b';
 const openLink=()=>{try{const u=new URL(siteLink());u.searchParams.set('open','1');return u.toString()}catch(e){return siteLink()+'?open=1'}};
 /* فحص حالة الإدخال المفتوح في الإعدادات: يوضح سبب عدم ظهور الزر الأحمر */
 async function checkOpenEntry(){
